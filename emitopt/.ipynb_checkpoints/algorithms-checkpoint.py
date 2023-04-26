@@ -7,9 +7,9 @@ from botorch.models.model import Model
 from scipy.optimize import minimize
 from torch import Tensor
 
-from .sampling import draw_product_kernel_post_paths
+from emitopt.sampling import draw_product_kernel_post_paths
 
-from .utils import (
+from emitopt.utils import (
     get_meas_scan_inputs_from_tuning_configs,
     get_valid_emittance_samples,
     post_mean_emit,

@@ -36,27 +36,6 @@ def draw_poly_kernel_prior_paths(
     return paths
 
 
-def draw_quad_kernel_prior_paths(
-    quad_kernel, n_samples
-):  # quad_kernel is a scaled polynomial(power=2) kernel
-    c = quad_kernel.offset
-    ws = torch.randn(size=[n_samples, 1, 3])
-
-    def paths(xs):
-        if (
-            len(xs.shape) == 2 and xs.shape[1] == 1
-        ):  # xs must be n_samples x npoints x 1 dim
-            xs = xs.repeat(n_samples, 1, 1)  # duplicate over batch (sample) dim
-
-        X = torch.concat([xs * xs, (2 * c).sqrt() * xs, c.expand(*xs.shape)], dim=2)
-        W = ws.repeat(1, xs.shape[1], 1)  # ws is n_samples x 1 x 3 dim
-
-        phis = W * X
-        return torch.sum(phis, dim=-1)  # result tensor is shape n_samples x npoints
-
-    return paths
-
-
 def draw_product_kernel_prior_paths(model, n_samples):
     ndim = model.train_inputs[0].shape[1]
 
@@ -168,6 +147,89 @@ def draw_product_kernel_post_paths(model, n_samples, cpu=True):
     return post_paths
 
 
+def draw_linear_product_kernel_prior_paths(model, n_samples):
+    ndim = model.train_inputs[0].shape[1]
+
+    outputscale = copy.copy(model.covar_module.outputscale.detach())
+    kernels = []
+    dims = []
+    
+    for i in range(len(model.covar_module.base_kernel.kernels)):
+        lin_kernel = copy.deepcopy(model.covar_module.base_kernel.kernels[i])
+        kernels += [lin_kernel]
+        dims += [lin_kernel.active_dims]
+        
+    lin_prior_paths = [draw_poly_kernel_prior_paths(kernel, n_samples)
+                      for kernel in kernels]
+
+    def linear_product_kernel_prior_paths(xs):
+        ys_lin = []
+        for i in range(len(lin_prior_paths)):
+            xs_lin = torch.index_select(xs, dim=-1, index=dims[i]).float()
+            ys_lin += [lin_prior_paths[i](xs_lin)]
+        output = 1.
+        for ys in ys_lin:
+            output *= ys
+        return (outputscale.sqrt() * output).double()
+
+    return linear_product_kernel_prior_paths
+
+
+def draw_linear_product_kernel_post_paths(model, n_samples, cpu=True):
+    linear_product_kernel_prior_paths = draw_linear_product_kernel_prior_paths(
+        model, n_samples=n_samples
+    )
+
+    train_x = model.train_inputs[0]
+
+    train_y = model.train_targets.reshape(-1, 1)
+
+    train_y = train_y - model.mean_module(train_x).reshape(train_y.shape)
+
+    Knn = model.covar_module(train_x, train_x)
+
+    sigma = torch.sqrt(model.likelihood.noise[0])
+
+    K = Knn + sigma**2 * torch.eye(Knn.shape[0])
+
+    prior_residual = train_y.repeat(n_samples, 1, 1).reshape(
+        n_samples, -1
+    ) - linear_product_kernel_prior_paths(train_x)
+    prior_residual -= sigma * torch.randn_like(prior_residual)
+
+    Lnn = torch.cholesky(K.to_dense())
+    batched_lnn = torch.stack([Lnn] * n_samples)
+    batched_lnnt = torch.stack([Lnn.T] * n_samples)
+
+    vbar = torch.linalg.solve(batched_lnn, prior_residual)
+    v = torch.linalg.solve(batched_lnnt, vbar)
+    v = v.reshape(-1, 1)
+
+    v = v.reshape(n_samples, -1, 1)
+    v_t = v.transpose(1, 2)
+
+    def post_paths(xs):
+        if model.input_transform is not None:
+            xs = model.input_transform(xs)
+
+        K_update = model.covar_module(train_x, xs.double())
+
+        update = torch.matmul(v_t, K_update)
+        update = update.reshape(n_samples, -1)
+
+        prior = linear_product_kernel_prior_paths(xs)
+
+        post = prior + update + model.mean_module(xs)
+        if model.outcome_transform is not None:
+            post = model.outcome_transform.untransform(post)[0]
+
+        return post
+
+    post_paths.n_samples = n_samples
+
+    return post_paths
+
+
 def compare_sampling_methods(
     model, domain, scan_dim, n_samples_per_batch=100, n_batches=100, verbose=False
 ):
@@ -188,7 +250,8 @@ def compare_sampling_methods(
             print("batch", i)
 
         # pathwise sampling
-        post_paths = draw_product_kernel_post_paths(
+#         post_paths = draw_product_kernel_post_paths(
+        post_paths = draw_linear_product_kernel_post_paths(
             model, n_samples=n_samples_per_batch
         )
 

@@ -1,7 +1,63 @@
 import torch
 
 
+def sum_samplewise_misalignment_flat_X(post_paths, X_tuning_flat, meas_dims, meas_scans):
+        
+    X_tuning = X_tuning_flat.double().reshape(post_paths.n_samples, -1)
+        
+    return torch.sum(
+            post_path_misalignment(
+                post_paths, X_tuning, meas_dims, meas_scans, samplewise=True
+            )[0]
+    )
+
+
+def post_path_misalignment(post_paths,
+                       X_tuning, #n x d tensor 
+                       meas_dims, #list of integers
+                       meas_scans, # tensor of measurement device(s) scan inputs, shape: len(meas_dims) x 2
+                       samplewise=False
+                       ):
+    
+    n_steps_meas_scan = 1 + len(meas_dims)
+    n_tuning_configs = X_tuning.shape[0]
+
+    #construct measurement scan inputs
+    xs = torch.repeat_interleave(X_tuning, n_steps_meas_scan, dim=0)
+        
+    for i in range(len(meas_dims)):
+        meas_dim = meas_dims[i]
+        meas_scan = meas_scans[i]
+        full_scan_column = meas_scan[0].repeat(n_steps_meas_scan,1)
+        full_scan_column[i+1, 0] = meas_scan[1]
+        full_scan_column_repeated = full_scan_column.repeat(n_tuning_configs,1)
+
+
+        xs = torch.cat(
+            (xs[:, :meas_dim], full_scan_column_repeated, xs[:, meas_dim:]), dim=1
+        )
+        
+    if samplewise:
+        xs = xs.reshape(n_tuning_configs, n_steps_meas_scan, -1)
+
+    ys = post_paths(xs)
+    ys = ys.reshape(-1, n_steps_meas_scan)
+    
+    rise = (ys[:,1:] - ys[:,0].reshape(-1,1))
+    run = (meas_scans[:,1] - meas_scans[:,0]).T.repeat(ys.shape[0], 1)
+    slope = rise/run
+    
+    misalignment = slope.pow(2).sum(dim=1)
+    
+    if not samplewise:
+        ys = ys.reshape(-1, n_tuning_configs, n_steps_meas_scan)
+        misalignment = misalignment.reshape(-1, n_tuning_configs)
+        
+    return misalignment, xs, ys
+
+
 def sum_samplewise_emittance_flat_X(post_paths, beam_energy, q_len, distance, X_tuning_flat, meas_dim, X_meas):
+    
     X_tuning = X_tuning_flat.double().reshape(post_paths.n_samples, -1)
 
     return torch.sum(

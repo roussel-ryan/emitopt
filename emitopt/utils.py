@@ -213,43 +213,48 @@ def get_meas_scan_inputs_from_tuning_configs(meas_dim, X_tuning, X_meas):
     return xs
 
 
-def compute_emits_from_batched_beamsize_scans(ks_meas, ys_batch, q_len, distance):
+def compute_emits_from_batched_beamsize_scans(k, y_batch, q_len, distance):
     '''    
-    xs_meas is assumed to be a 1d tensor of shape (n_steps_quad_scan,)
-    representing the measurement parameter inputs of the emittance scan
+    k: 1d torch tensor of shape (n_steps_quad_scan,)
+    representing the measurement quad geometric focusing strengths in [m^-2]
+    used in the emittance scan
 
-    ys_batch is assumed to be shape n_scans x n_steps_quad_scan,
-    where each row represents the beamsize outputs of an emittance scan
-    with input given by xs_meas
+    y_batch: 2d torch tensor of shape (n_scans x n_steps_quad_scan),
+    where each row represents the beamsize squared outputs in [m^2] of an emittance scan
+    with inputs given by k
 
-    note that every measurement scan is assumed to have been evaluated
-    at the single set of measurement param inputs described by xs_meas
+    q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
+    
+    distance: the longitudinal distance (drift length) in [m] from the measurement 
+    quadrupole to the observation screen
+    
+    NOTE: every measurement scan is assumed to have been evaluated
+    at the single set of measurement param inputs described by k
 
-    geometric configuration for LCLS OTR2 emittance/quad measurement scan
-    q_len = 0.108  # measurement quad thickness
-    distance = 2.26  # drift length from measurement quad to observation screen
+    NOTE: geometric configuration for LCLS OTR2 emittance/quad measurement scan
+        q_len = 0.108  # measurement quad thickness
+        distance = 2.26  # drift length from measurement quad to observation screen
     '''
 
+    device = k.device
 
-    device = ks_meas.device
-
-    ks_meas = ks_meas.reshape(-1, 1)
-    xs_meas = ks_meas * distance * q_len
+    k = k.reshape(-1, 1)
+    x_fit = k * distance * q_len
 
     # least squares method to calculate parabola coefficients
     A_block = torch.cat(
         (
-            xs_meas**2,
-            xs_meas,
+            x_fit**2,
+            x_fit,
             torch.tensor([1], device=device)
-            .repeat(len(xs_meas))
-            .reshape(xs_meas.shape),
+            .repeat(len(x_fit))
+            .reshape(x_fit.shape),
         ),
         dim=1,
     )
-    B = ys_batch.double()
+    B = y_batch.double()
 
-    abc = A_block.pinverse().repeat(*ys_batch.shape[:-1], 1, 1).double() @ B.reshape(
+    abc = A_block.pinverse().repeat(*y_batch.shape[:-1], 1, 1).double() @ B.reshape(
         *B.shape, 1
     )
     abc = abc.reshape(*abc.shape[:-1])
@@ -268,34 +273,176 @@ def compute_emits_from_batched_beamsize_scans(ks_meas, ys_batch, q_len, distance
         device=device,
     )
 
-    sigs = torch.matmul(
+    sig = torch.matmul(
         M.repeat(*abc.shape[:-1], 1, 1).double(),
         abc.reshape(*abc.shape[:-1], 3, 1).double(),
     )  # column vectors of sig11, sig12, sig22
 
-    Sigmas = (
-        sigs.reshape(-1, 3)
+    sigma = (
+        sig.reshape(-1, 3)
         .repeat_interleave(torch.tensor([1, 2, 1], device=device), dim=1)
-        .reshape(*sigs.shape[:-2], 2, 2)
-    )  # 2x2 Sigma/covar beam matrix
+        .reshape(*sig.shape[:-2], 2, 2)
+    )  # 2x2 sigma/covar beam matrix
 
-    # compute emittances from Sigma (beam) matrices
-    emits_squared_raw = torch.linalg.det(Sigmas)
+    # compute emittances from sigma (beam) matrices
+    emit_squared = torch.linalg.det(sigma)
 
-    emits = torch.sqrt(
-        emits_squared_raw
+    emit = torch.sqrt(
+        emit_squared
     )  # these are the emittances for every tuning parameter combination.
 
-    emits_squared_raw = emits_squared_raw.reshape(ys_batch.shape[0], -1)
-    emits = emits.reshape(ys_batch.shape[0], -1)
+    emit_squared = emit_squared.reshape(y_batch.shape[0], -1)
+    emit = emit.reshape(y_batch.shape[0], -1)
 
     abc_k_space = torch.cat((abc[:,0].reshape(-1,1)*(distance*q_len)**2, 
                              abc[:,1].reshape(-1,1)*(distance*q_len), 
                              abc[:,2].reshape(-1,1)), 
                             dim=1)
     
-    return emits, emits_squared_raw, is_valid, abc_k_space
+    return emit, emit_squared, is_valid, abc_k_space, sigma
 
+
+def compute_emit_from_single_beamsize_scan_numpy(k, y, q_len, distance, tkwargs=None):
+    '''
+    Parameters:
+    
+        k: 1d numpy array of shape (n_steps_quad_scan,)
+        representing the measurement quad geometric focusing strengths in [m^-2]
+        used in the emittance scan
+
+        y_batch: 1d numpy array of shape (n_steps_quad_scan, )
+        representing the beamsize outputs in [m] of an emittance scan
+        with inputs given by k
+
+        q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
+
+        distance: the longitudinal distance (drift length) in [m] from the measurement 
+        quadrupole to the observation screen
+    
+    Returns:
+        
+        emit: the computed emittance from a simple parabolic fit to each measurement scan
+        (can be NaN if the parabolic fit is not physical)
+        
+        emit_squared: the computed emittance squared from parabolic fitting (can be negative
+        if the fit is not physical)
+        
+        
+    NOTE: every measurement scan is assumed to have been evaluated
+    at the single set of measurement param inputs described by k
+
+    NOTE: geometric configuration for LCLS OTR2 emittance/quad measurement scan
+        q_len = 0.108  # measurement quad thickness
+        distance = 2.26  # drift length from measurement quad to observation screen
+    '''
+    if tkwargs is None:
+        tkwargs = {"dtype": torch.double, "device": "cpu"}
+        
+    (emit, 
+     emit_squared, 
+     is_valid, 
+     abc_k_space, 
+     sigma) = compute_emits_from_batched_beamsize_scans(
+                                                    torch.tensor(k, **tkwargs),
+                                                    torch.tensor(y**2, **tkwargs).reshape(1,-1),
+                                                    q_len,
+                                                    distance
+                                                    )
+    return (
+            emit.detach().numpy(),
+            emit_squared.detach().numpy(),
+            is_valid.detach().numpy(),
+            abc_k_space.detach().numpy(),
+            sigma.detach().numpy()
+           )
+
+
+# +
+from botorch.models.gp_regression import SingleTaskGP
+from botorch.models.transforms import Normalize, Standardize
+from botorch import fit_gpytorch_mll
+from gpytorch.kernels import MaternKernel, PolynomialKernel, ScaleKernel
+from gpytorch.priors import GammaPrior
+from gpytorch import ExactMarginalLogLikelihood
+
+def get_valid_emit_samples_from_quad_scan(k, y, q_len, distance, n_samples=10000, n_steps_quad_scan=10, visualize=False, tkwargs=None):   
+    if tkwargs is None:
+        tkwargs = {"dtype": torch.double, "device": "cpu"}
+        covar_module = ScaleKernel(MaternKernel(),
+                                   outputscale_prior=GammaPrior(2.0, 0.15))
+#         covar_module = ScaleKernel(PolynomialKernel(power=2),
+#                                    outputscale_prior=GammaPrior(2.0, 0.15))        
+    model = SingleTaskGP(torch.tensor(k, **tkwargs).reshape(-1,1),
+                        torch.tensor(y, **tkwargs).pow(2).reshape(-1,1),
+                        covar_module=covar_module,
+                        input_transform=Normalize(1),
+                        outcome_transform=Standardize(1))
+    mll = ExactMarginalLogLikelihood(model.likelihood, model)
+    fit_gpytorch_mll(mll)
+        
+    low = model._original_train_inputs.min()
+    hi = model._original_train_inputs.max()
+    
+    k_virtual = torch.linspace(low, hi, n_steps_quad_scan, **tkwargs)
+
+    p = model.posterior(k_virtual.reshape(-1,1))
+    bss = p.sample(torch.Size([n_samples])).reshape(-1, n_steps_quad_scan)
+
+    (
+        emits,
+        emits_sq,
+        is_valid,
+        abc_k_space,
+        sigmas_all
+    ) = compute_emits_from_batched_beamsize_scans(k_virtual, bss, q_len, distance)
+    sample_validity_rate = (torch.sum(is_valid) / is_valid.shape[0]).reshape(1)
+
+    cut_ids = torch.tensor(range(emits_sq.shape[0]))[is_valid]
+    emits_sq_valid = torch.index_select(
+        emits_sq, dim=0, index=cut_ids
+    )
+    emits_valid = emits_sq_valid.sqrt()
+    
+
+    if visualize:
+        #only designed for beam size squared models with 1d input
+        abc_valid = torch.index_select(
+            abc_k_space, dim=0, index=cut_ids
+        )
+        bss_fits_valid = abc_valid @ torch.cat((k_virtual.pow(2).reshape(1,-1),
+                                   k_virtual.pow(1).reshape(1,-1),
+                                   torch.ones_like(k_virtual).reshape(1,-1)),
+                                   dim=0
+                                   )
+        upper_quant = torch.quantile(bss_fits_valid, q=0.975, dim=0)
+        lower_quant = torch.quantile(bss_fits_valid, q=0.025, dim=0)
+        
+        from matplotlib import pyplot as plt
+        import os
+        os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+        fit = plt.fill_between(k_virtual, 
+                               lower_quant, 
+                               upper_quant, 
+                               alpha=0.3, 
+                               label='Bayesian Fit', 
+                               zorder=1)
+        plt.scatter(model._original_train_inputs.flatten(),
+                    model.outcome_transform.untransform(model.train_targets)[0].flatten(),
+                    marker='x',
+                    s=120,
+                    c='orange',
+                    zorder=2)
+        plt.title('Emittance Measurement Scan Fits')
+        plt.xlabel('Measurement Quad Geometric Focusing Strength (k)')
+        plt.ylabel('Beam Size Squared')
+        plt.legend(handles=[fit])
+        plt.show()
+        plt.close()
+        
+    return emits_valid, emits_sq, is_valid, sample_validity_rate, sigmas_all
+
+
+# -
 
 def get_valid_emittance_samples(
     model, beam_energy, q_len, distance, X_tuning=None, domain=None, meas_dim=None, n_samples=10000, n_steps_quad_scan=10, visualize=False
@@ -329,7 +476,7 @@ def get_valid_emittance_samples(
         emits_sq_at_target,
         is_valid,
         abc_k_space
-    ) = compute_emits_from_batched_beamsize_scans(ks, bss, q_len, distance)
+    ) = compute_emits_from_batched_beamsize_scans(ks, bss, q_len, distance)[:4]
     sample_validity_rate = (torch.sum(is_valid) / is_valid.shape[0]).reshape(1)
 
     cut_ids = torch.tensor(range(emits_sq_at_target.shape[0]))[is_valid]

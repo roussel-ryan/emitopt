@@ -153,21 +153,22 @@ def draw_linear_product_kernel_prior_paths(model, n_samples):
     outputscale = copy.copy(model.covar_module.outputscale.detach())
     kernels = []
     dims = []
-    
+
     for i in range(len(model.covar_module.base_kernel.kernels)):
         lin_kernel = copy.deepcopy(model.covar_module.base_kernel.kernels[i])
         kernels += [lin_kernel]
         dims += [lin_kernel.active_dims]
-        
-    lin_prior_paths = [draw_poly_kernel_prior_paths(kernel, n_samples)
-                      for kernel in kernels]
+
+    lin_prior_paths = [
+        draw_poly_kernel_prior_paths(kernel, n_samples) for kernel in kernels
+    ]
 
     def linear_product_kernel_prior_paths(xs):
         ys_lin = []
         for i in range(len(lin_prior_paths)):
             xs_lin = torch.index_select(xs, dim=-1, index=dims[i]).float()
             ys_lin += [lin_prior_paths[i](xs_lin)]
-        output = 1.
+        output = 1.0
         for ys in ys_lin:
             output *= ys
         return (outputscale.sqrt() * output).double()
@@ -250,7 +251,7 @@ def compare_sampling_methods(
             print("batch", i)
 
         # pathwise sampling
-#         post_paths = draw_product_kernel_post_paths(
+        #         post_paths = draw_product_kernel_post_paths(
         post_paths = draw_linear_product_kernel_post_paths(
             model, n_samples=n_samples_per_batch
         )

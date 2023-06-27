@@ -1,15 +1,19 @@
 import copy
-from typing import Dict, Optional, Union, Tuple
 from abc import ABC
-from pydantic import Field
+from typing import Dict, Optional, Tuple, Union
 
 import torch
 from botorch.models.model import Model
+from pydantic import Field
 
 from scipy.optimize import minimize
 from torch import Tensor
+from xopt.generators.bayesian.bax.algorithms import Algorithm
 
-from .sampling import draw_product_kernel_post_paths, draw_linear_product_kernel_post_paths
+from .sampling import (
+    draw_linear_product_kernel_post_paths,
+    draw_product_kernel_post_paths,
+)
 
 from .utils import (
     get_meas_scan_inputs_from_tuning_configs,
@@ -18,9 +22,8 @@ from .utils import (
     post_path_emit,
     post_path_misalignment,
     sum_samplewise_emittance_flat_X,
-    sum_samplewise_misalignment_flat_X
+    sum_samplewise_misalignment_flat_X,
 )
-from xopt.generators.bayesian.bax.algorithms import Algorithm
 
 
 def unif_random_sample_domain(n_samples, domain):
@@ -36,31 +39,36 @@ def unif_random_sample_domain(n_samples, domain):
 
 class ScipyMinimizeEmittance(Algorithm, ABC):
     name = "ScipyMinimizeEmittance"
-    beam_energy: float = Field(
-        description="electron beam energy in MeV")
+    beam_energy: float = Field(description="electron beam energy in MeV")
     q_len: float = Field(
-        description="the longitudinal thickness of the measurement quadrupole")
+        description="the longitudinal thickness of the measurement quadrupole"
+    )
     distance: float = Field(
-        description="the distance (drift length) from measurement quad to observation screen")
+        description="the distance (drift length) from measurement quad to observation screen"
+    )
     meas_dim: int = Field(
         description="index identifying the measurement quad dimension in the model"
     )
-    n_steps_measurement_param: int = Field(3,
-        description="number of steps to use in the virtual measurement scans")
-    n_steps_exe_paths: int = Field(11,
-        description='number of points to retain as execution path subsequences')
+    n_steps_measurement_param: int = Field(
+        3, description="number of steps to use in the virtual measurement scans"
+    )
+    n_steps_exe_paths: int = Field(
+        11, description="number of points to retain as execution path subsequences"
+    )
 
     def get_execution_paths(self, model: Model, bounds: Tensor):
-        
-        X_stars_all, emit_stars_all, is_valid, post_paths_cpu = self.get_sample_optimal_tuning_configs(model, bounds, cpu=True)
+        (
+            X_stars_all,
+            emit_stars_all,
+            is_valid,
+            post_paths_cpu,
+        ) = self.get_sample_optimal_tuning_configs(model, bounds, cpu=True)
 
         device = torch.tensor(1).device
         torch.set_default_tensor_type("torch.DoubleTensor")
 
         # prepare column of measurement scans coordinates
-        X_meas_dense = torch.linspace(
-            *bounds.T[self.meas_dim], self.n_steps_exe_paths
-        )
+        X_meas_dense = torch.linspace(*bounds.T[self.meas_dim], self.n_steps_exe_paths)
 
         # expand the X tensor to represent quad measurement scans
         # at the locations in tuning parameter space specified by X
@@ -69,7 +77,7 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
         )
 
         xs_exe = xs.reshape(self.n_samples, self.n_steps_exe_paths, -1)
-        
+
         # evaluate posterior samples at input locations
         ys_exe = post_paths_cpu(xs_exe).reshape(
             self.n_samples, self.n_steps_exe_paths, 1
@@ -81,43 +89,37 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
         if sum(is_valid) < 3:
             print("Scipy failed to find at least 3 physically valid solutions.")
             # no cut
-            cut_ids = torch.tensor(range(self.n_samples)) 
+            cut_ids = torch.tensor(range(self.n_samples))
         else:
             # only keep the physically valid solutions
             cut_ids = torch.tensor(range(self.n_samples))[is_valid]
 
         xs_exe = torch.index_select(xs_exe.to(device), dim=0, index=cut_ids)
         ys_exe = torch.index_select(ys_exe.to(device), dim=0, index=cut_ids)
-        X_stars = torch.index_select(
-            X_stars_all.to(device), dim=0, index=cut_ids
-        )
-        emit_stars = torch.index_select(
-            emit_stars_all.to(device), dim=0, index=cut_ids
-        )
+        X_stars = torch.index_select(X_stars_all.to(device), dim=0, index=cut_ids)
+        emit_stars = torch.index_select(emit_stars_all.to(device), dim=0, index=cut_ids)
 
         results_dict = {
-                        'xs_exe': xs_exe,
-                        'ys_exe': ys_exe,
-                        'X_stars': X_stars,
-                        'emit_stars': emit_stars,
-                        'X_stars_all': X_stars_all,
-                        'emit_stars_all': emit_stars_all,
-                        'is_valid': is_valid,
-                        'post_paths_cpu': post_paths_cpu,
-                        }
-        
+            "xs_exe": xs_exe,
+            "ys_exe": ys_exe,
+            "X_stars": X_stars,
+            "emit_stars": emit_stars,
+            "X_stars_all": X_stars_all,
+            "emit_stars_all": emit_stars_all,
+            "is_valid": is_valid,
+            "post_paths_cpu": post_paths_cpu,
+        }
+
         return xs_exe, ys_exe, results_dict
 
     def get_sample_optimal_tuning_configs(
         self, model: Model, bounds: Tensor, verbose=False, cpu=False
     ):
         temp_id = self.meas_dim + 1
-        tuning_domain = torch.cat(
-            (bounds.T[: self.meas_dim], bounds.T[temp_id:])
-        )
+        tuning_domain = torch.cat((bounds.T[: self.meas_dim], bounds.T[temp_id:]))
         device = torch.tensor(1).device
         torch.set_default_tensor_type("torch.DoubleTensor")
-        
+
         X_meas = torch.linspace(
             *bounds.T[self.meas_dim], self.n_steps_measurement_param
         )
@@ -137,8 +139,13 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
         def target_func_for_scipy(X_tuning_flat):
             return (
                 sum_samplewise_emittance_flat_X(
-                    post_paths_cpu, self.beam_energy, self.q_len, self.distance, 
-                    torch.tensor(X_tuning_flat), self.meas_dim,  X_meas.cpu()
+                    post_paths_cpu,
+                    self.beam_energy,
+                    self.q_len,
+                    self.distance,
+                    torch.tensor(X_tuning_flat),
+                    self.meas_dim,
+                    X_meas.cpu(),
                 )
                 .detach()
                 .cpu()
@@ -147,10 +154,14 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
 
         def target_func_for_torch(X_tuning_flat):
             return sum_samplewise_emittance_flat_X(
-                    post_paths_cpu, self.beam_energy, self.q_len, self.distance, 
-                    X_tuning_flat, self.meas_dim,  X_meas.cpu()
+                post_paths_cpu,
+                self.beam_energy,
+                self.q_len,
+                self.distance,
+                X_tuning_flat,
+                self.meas_dim,
+                X_meas.cpu(),
             )
-        
 
         def target_jac(X):
             return (
@@ -187,7 +198,9 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
             )
 
             print(
-                "ScipyMinimizeEmittance took", res.nit, "steps in get_sample_optimal_tuning_configs()."
+                "ScipyMinimizeEmittance took",
+                res.nit,
+                "steps in get_sample_optimal_tuning_configs().",
             )
 
         x_stars_flat = torch.tensor(res.x)
@@ -198,8 +211,8 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
 
         emit_stars_all, is_valid = post_path_emit(
             post_paths_cpu,
-            self.beam_energy, 
-            self.q_len, 
+            self.beam_energy,
+            self.q_len,
             self.distance,
             X_stars_all,
             self.meas_dim,
@@ -212,20 +225,28 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
             torch.set_default_tensor_type("torch.cuda.DoubleTensor")
 
         if cpu:
-            return X_stars_all, emit_stars_all, is_valid, post_paths_cpu  # X_stars should still be on cpu
+            return (
+                X_stars_all,
+                emit_stars_all,
+                is_valid,
+                post_paths_cpu,
+            )  # X_stars should still be on cpu
         else:
-            return X_stars_all.to(device), emit_stars_all.to(device), is_valid.to(device), post_paths_cpu
+            return (
+                X_stars_all.to(device),
+                emit_stars_all.to(device),
+                is_valid.to(device),
+                post_paths_cpu,
+            )
 
     def mean_output(self, model: Model, bounds: Tensor, num_restarts=1):
         X_meas = torch.linspace(
             *bounds.T[self.meas_dim], self.n_steps_measurement_param
         )
-        
+
         temp_id = self.meas_dim + 1
-        tuning_domain = torch.cat(
-            (bounds.T[: self.meas_dim], bounds.T[temp_id:])
-        )
-        
+        tuning_domain = torch.cat((bounds.T[: self.meas_dim], bounds.T[temp_id:]))
+
         def target_func_for_scipy(X_tuning_flat):
             return (
                 post_mean_emit(
@@ -236,7 +257,7 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
                     torch.tensor(X_tuning_flat).reshape(num_restarts, -1),
                     self.meas_dim,
                     X_meas,
-                    squared=True
+                    squared=True,
                 )[0]
                 .flatten()
                 .sum()
@@ -246,7 +267,7 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
             )
 
         def target_func_for_torch(X_tuning_flat):
-                return (
+            return (
                 post_mean_emit(
                     model,
                     self.beam_energy,
@@ -255,11 +276,12 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
                     X_tuning_flat.reshape(num_restarts, -1),
                     self.meas_dim,
                     X_meas,
-                    squared=True
-                    )[0]
-                    .flatten()
-                    .sum()
-                )
+                    squared=True,
+                )[0]
+                .flatten()
+                .sum()
+            )
+
         def target_jac(X):
             return (
                 torch.autograd.functional.jacobian(
@@ -271,9 +293,7 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
             )
 
         X_tuning_init = (
-            unif_random_sample_domain(num_restarts, tuning_domain)
-            .double()
-            .flatten()
+            unif_random_sample_domain(num_restarts, tuning_domain).double().flatten()
         )
 
         res = minimize(
@@ -287,7 +307,14 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
 
         X_tuned_candidates = torch.tensor(res.x).reshape(num_restarts, -1)
         min_emit_sq_candidates = post_mean_emit(
-            model, self.beam_energy, self.q_len, self.distance, X_tuned_candidates, self.meas_dim, X_meas, squared=True
+            model,
+            self.beam_energy,
+            self.q_len,
+            self.distance,
+            X_tuned_candidates,
+            self.meas_dim,
+            X_meas,
+            squared=True,
         )[0].squeeze()
 
         min_emit_sq_id = torch.argmin(min_emit_sq_candidates)
@@ -330,30 +357,35 @@ class ScipyBeamAlignment(Algorithm, ABC):
         self, model: Model, bounds: Tensor
     ) -> Tuple[Tensor, Tensor, Dict]:
         """get execution paths that minimize the objective function"""
-        
-        X_stars_all, xs, ys, post_paths_cpu = self.get_sample_optimal_tuning_configs(model, bounds, cpu=False)
+
+        X_stars_all, xs, ys, post_paths_cpu = self.get_sample_optimal_tuning_configs(
+            model, bounds, cpu=False
+        )
 
         xs_exe = xs
         ys_exe = ys.reshape(*ys.shape, 1)
-        
 
         results_dict = {
-                        'xs_exe': xs_exe,
-                        'ys_exe': ys_exe,
-                        'X_stars': X_stars_all,
-                        'post_paths_cpu': post_paths_cpu,
-                        }
-        
+            "xs_exe": xs_exe,
+            "ys_exe": ys_exe,
+            "X_stars": X_stars_all,
+            "post_paths_cpu": post_paths_cpu,
+        }
+
         return xs_exe, ys_exe, results_dict
 
     def get_sample_optimal_tuning_configs(
         self, model: Model, bounds: Tensor, verbose=False, cpu=False
     ):
-        meas_scans = torch.index_select(bounds.T, dim=0, index=torch.tensor(self.meas_dims))
+        meas_scans = torch.index_select(
+            bounds.T, dim=0, index=torch.tensor(self.meas_dims)
+        )
         ndim = bounds.shape[1]
         tuning_dims = [i for i in range(ndim) if i not in self.meas_dims]
-        tuning_domain = torch.index_select(bounds.T, dim=0, index=torch.tensor(tuning_dims))
-    
+        tuning_domain = torch.index_select(
+            bounds.T, dim=0, index=torch.tensor(tuning_dims)
+        )
+
         device = torch.tensor(1).device
         torch.set_default_tensor_type("torch.DoubleTensor")
 
@@ -372,22 +404,21 @@ class ScipyBeamAlignment(Algorithm, ABC):
         # minimize
         def target_func_for_scipy(X_tuning_flat):
             return (
-                sum_samplewise_misalignment_flat_X(post_paths_cpu, 
-                                                   torch.tensor(X_tuning_flat), 
-                                                   self.meas_dims, 
-                                                   meas_scans.cpu())
+                sum_samplewise_misalignment_flat_X(
+                    post_paths_cpu,
+                    torch.tensor(X_tuning_flat),
+                    self.meas_dims,
+                    meas_scans.cpu(),
+                )
                 .detach()
                 .cpu()
                 .numpy()
             )
 
         def target_func_for_torch(X_tuning_flat):
-            return( 
-                sum_samplewise_misalignment_flat_X(post_paths_cpu, 
-                                                   X_tuning_flat, 
-                                                   self.meas_dims, 
-                                                   meas_scans.cpu())
-                  )
+            return sum_samplewise_misalignment_flat_X(
+                post_paths_cpu, X_tuning_flat, self.meas_dims, meas_scans.cpu()
+            )
 
         def target_jac(X):
             return (
@@ -424,7 +455,9 @@ class ScipyBeamAlignment(Algorithm, ABC):
             )
 
             print(
-                "ScipyBeamAlignment took", res.nit, "steps in get_sample_optimal_tuning_configs()."
+                "ScipyBeamAlignment took",
+                res.nit,
+                "steps in get_sample_optimal_tuning_configs().",
             )
 
         x_stars_flat = torch.tensor(res.x)
@@ -433,12 +466,13 @@ class ScipyBeamAlignment(Algorithm, ABC):
             self.n_samples, -1
         )  # each row represents its respective sample's optimal tuning config
 
-        misalignment, xs, ys = post_path_misalignment(post_paths_cpu,
-                       X_stars_all, #n x d tensor 
-                       self.meas_dims, #list of integers
-                       meas_scans.cpu(), # tensor of measurement device(s) scan inputs, shape: len(meas_dims) x 2
-                       samplewise=True
-                       )
+        misalignment, xs, ys = post_path_misalignment(
+            post_paths_cpu,
+            X_stars_all,  # n x d tensor
+            self.meas_dims,  # list of integers
+            meas_scans.cpu(),  # tensor of measurement device(s) scan inputs, shape: len(meas_dims) x 2
+            samplewise=True,
+        )
 
         if device.type == "cuda":
             torch.set_default_tensor_type("torch.cuda.DoubleTensor")

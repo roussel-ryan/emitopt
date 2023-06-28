@@ -183,19 +183,19 @@ def post_path_emit_squared(
     """
 
     # get the number of points in the scan uniformly spaced along measurement domain
-    n_steps_quad_scan = len(x_meas)
+    n_steps_quad_scan = len(X_meas)
 
     # get the number of points in the tuning parameter space specified by x_tuning
     n_tuning_configs = x_tuning.shape[0]
 
     # get the complete tensor of inputs for a set of virtual quad measurement scans to be
     # performed at the locations in tuning parameter space specified by x_tuning
-    xs = get_meas_scan_inputs_from_tuning_configs(meas_dim, x_tuning, x_meas)
+    xs = get_meas_scan_inputs_from_tuning_configs(meas_dim, x_tuning, X_meas)
 
     if convert_quad_xs:
-        k_meas = x_meas * get_quad_strength_conversion_factor(beam_energy, q_len)
+        k_meas = X_meas * get_quad_strength_conversion_factor(beam_energy, q_len)
     else:
-        k_meas = x_meas
+        k_meas = X_meas
 
     if samplewise:
         # add assert n_tuning_configs == post_paths.n_samples
@@ -468,9 +468,6 @@ def compute_emit_from_single_beamsize_scan_numpy(
     return (
         emit.detach().numpy(),
         emit_squared.detach().numpy(),
-        is_valid.detach().numpy(),
-        abc.detach().numpy(),
-        sigma.detach().numpy(),
     )
 
 

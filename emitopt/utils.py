@@ -455,8 +455,8 @@ def compute_emit_from_single_beamsize_scan_numpy(
         used in the emittance scan
 
         y: 1d numpy array of shape (n_steps_quad_scan, )
-        representing the beamsize outputs in [m] of an emittance scan
-        with inputs given by k
+            representing the beam size measurements (NOT SQUARED) in [m] of an emittance scan
+            with inputs given by k
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
 
@@ -504,6 +504,79 @@ def compute_emit_from_single_beamsize_scan_numpy(
 
 from botorch import fit_gpytorch_mll
 
+
+def fit_gp_quad_scan(
+    k,
+    y,
+    n_samples=10000,
+    n_steps_quad_scan=10,
+    covar_module=None,
+    tkwargs=None,
+):
+    """
+    A function that fits a GP model to an emittance beam size measurement quad scan
+    and returns a set of "virtual scans" (functions sampled from the GP model posterior).
+    The GP is fit to the BEAM SIZE SQUARED, and the virtual quad scans are NOT CHECKED 
+    for physical validity. 
+    
+    Parameters:
+
+        k: 1d numpy array of shape (n_steps_quad_scan,)
+        representing the measurement quad geometric focusing strengths in [m^-2]
+        used in the emittance scan
+
+        y: 1d numpy array of shape (n_steps_quad_scan, )
+            representing the beam size measurements (NOT SQUARED) in [m] of an emittance scan
+            with inputs given by k
+            
+        covar_module: the covariance module to be used in fitting of the SingleTaskGP 
+                    (modeling the function y**2 vs. k)
+                    If None, uses ScaleKernel(MaternKernel()).
+
+        tkwargs: dict containing the tensor device and dtype    
+
+        n_samples: the number of virtual measurement scan samples to evaluate for our "Bayesian" estimate
+
+        n_steps_quad_scan: the number of steps in our virtual measurement scans
+
+
+    Returns:
+        k_virtual: a 1d tensor representing the inputs for the virtual measurement scans.
+                    All virtual scans are evaluated at the same set of input locations.
+
+        bss: a tensor of shape (n_samples x n_steps_quad_scan) where each row repesents 
+        the beam size squared results of a virtual quad scan evaluated at the points k_virtual.
+    """
+    
+    if tkwargs is None:
+        tkwargs = {"dtype": torch.double, "device": "cpu"}
+        
+    k = torch.tensor(k, **tkwargs)
+    y = torch.tensor(y, **tkwargs)
+
+    if covar_module is None:
+        covar_module = ScaleKernel(
+            MaternKernel(), outputscale_prior=GammaPrior(2.0, 0.15)
+        )
+
+    model = SingleTaskGP(
+        k.reshape(-1, 1),
+        y.pow(2).reshape(-1, 1),
+        covar_module=covar_module,
+        input_transform=Normalize(1),
+        outcome_transform=Standardize(1),
+    )
+    mll = ExactMarginalLogLikelihood(model.likelihood, model)
+    fit_gpytorch_mll(mll)
+
+    k_virtual = torch.linspace(k.min(), k.max(), n_steps_quad_scan, **tkwargs)
+
+    p = model.posterior(k_virtual.reshape(-1, 1))
+    bss = p.sample(torch.Size([n_samples])).reshape(-1, n_steps_quad_scan)
+    
+    return k_virtual, bss
+
+
 # +
 from botorch.models.gp_regression import SingleTaskGP
 from botorch.models.transforms import Normalize, Standardize
@@ -536,8 +609,16 @@ def get_valid_emit_samples_from_quad_scan(
         used in the emittance scan
 
         y: 1d numpy array of shape (n_steps_quad_scan, )
-            representing the beamsize outputs in [m] of an emittance scan
+            representing the beam size measurements (NOT SQUARED) in [m] of an emittance scan
             with inputs given by k
+            
+        covar_module: the covariance module to be used in fitting of the SingleTaskGP 
+                    (modeling the function y**2 vs. k)
+                    If None, uses ScaleKernel(MaternKernel()).
+
+        visualize: boolean. Set to True to plot the parabolic fitting results.
+
+        tkwargs: dict containing the tensor device and dtype
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
 
@@ -548,12 +629,6 @@ def get_valid_emit_samples_from_quad_scan(
 
         n_steps_quad_scan: the number of steps in our virtual measurement scans
 
-        covar_module: the covariance module to be used in fitting of the SingleTaskGP (modeling the function y vs. k)
-                        If None, uses ScaleKernel(MaternKernel()).
-
-        visualize: boolean. Set to True to plot the parabolic fitting results.
-
-        tkwargs: dict containing the tensor device and dtype
 
     Returns:
         emits_valid: a tensor of physically valid emittance results from sampled measurement scans.
@@ -570,26 +645,15 @@ def get_valid_emit_samples_from_quad_scan(
     k = torch.tensor(k, **tkwargs)
     y = torch.tensor(y, **tkwargs)
 
-    if covar_module is None:
-        covar_module = ScaleKernel(
-            MaternKernel(), outputscale_prior=GammaPrior(2.0, 0.15)
-        )
-
-    model = SingleTaskGP(
-        k.reshape(-1, 1),
-        y.pow(2).reshape(-1, 1),
+    k_virtual, bss = fit_gp_quad_scan(
+        k=k,
+        y=y,
+        n_samples=n_samples,
+        n_steps_quad_scan=n_steps_quad_scan,
         covar_module=covar_module,
-        input_transform=Normalize(1),
-        outcome_transform=Standardize(1),
+        tkwargs=tkwargs
     )
-    mll = ExactMarginalLogLikelihood(model.likelihood, model)
-    fit_gpytorch_mll(mll)
-
-    k_virtual = torch.linspace(k.min(), k.max(), n_steps_quad_scan, **tkwargs)
-
-    p = model.posterior(k_virtual.reshape(-1, 1))
-    bss = p.sample(torch.Size([n_samples])).reshape(-1, n_steps_quad_scan)
-
+    
     (emits_sq, is_valid, abc_k_space, sigmas) = compute_emits(
         k_virtual, bss, q_len, distance
     )
@@ -621,7 +685,7 @@ def plot_parabolic_fits(k, y, abc, ci=0.95, tkwargs=None):
         used in the emittance scan
 
         y: 1d numpy array of shape (n_steps_quad_scan, )
-            representing the beamsize outputs in [m] of an emittance scan
+            representing the beam size measurements (NOT SQUARED) in [m] of an emittance scan
             with inputs given by k
 
         abc: tensor, shape (n x 3), containing n sets of parabola fit coefficients
@@ -768,3 +832,91 @@ def get_quad_strength_conversion_factor(E=0.135, q_len=0.108):
     conversion_factor = 0.299 / (10.0 * q_len * beta * E)
 
     return conversion_factor
+
+
+def plot_sample_optima_dist_inputs(results, tuning_parameter_names=None):
+    ndim = results[1]["x_stars_all"].shape[1]
+    niter = max(results.keys())
+    nsamples = results[1]["x_stars_all"].shape[0]
+
+    if tuning_parameter_names is None:
+        tuning_parameter_names = ['tuning_parameter_' + str(i) for i in range(ndim)]
+
+    from matplotlib import pyplot as plt
+    
+    fig, axs = plt.subplots(ndim, 1)
+
+    for i in range(ndim):
+
+        if ndim > 1:
+            ax = axs[i]
+        else:
+            ax = axs
+
+        ax.set_ylabel(tuning_parameter_names[i])
+        ax.set_xlabel("iteration")
+        
+        if i == 0:
+            ax.set_title("Sample Optima Distribution: Tuning Parameters")
+            
+        for key in results.keys():
+            is_valid = results[key]["is_valid"]
+            valid_ids = torch.tensor(range(nsamples))[is_valid]
+            ax.scatter(torch.tensor([key]).repeat(torch.sum(is_valid)), 
+                       torch.index_select(results[key]["x_stars_all"], dim=0, index=valid_ids)[:,i],
+                       c='C0')
+
+
+def plot_sample_optima_dist_emits(results):
+    niter = max(results.keys())
+    nsamples = results[1]["emit_stars_all"].shape[0]
+    
+    from matplotlib import pyplot as plt
+
+    fig, ax = plt.subplots(1)
+
+    ax.set_ylabel("$\epsilon$")
+    ax.set_xlabel("iteration")
+    ax.set_title("Sample Optima Distribution: Emittance")
+    for key in results.keys():
+        is_valid = results[key]["is_valid"]
+        valid_ids = torch.tensor(range(nsamples))[is_valid]
+        ax.scatter(torch.tensor([key]).repeat(torch.sum(is_valid)), 
+                   torch.index_select(results[key]["emit_stars_all"], dim=0, index=valid_ids)[:,0].detach(), 
+                   c='C0')
+
+
+def plot_valid_emit_prediction_at_x_tuning(model, 
+                                           x_tuning, 
+                                           scale_factor, 
+                                           q_len, 
+                                           distance, 
+                                           bounds, 
+                                           meas_dim, 
+                                           n_samples, 
+                                           n_steps_quad_scan):
+    (
+    emits_at_target_valid,
+    sample_validity_rate,
+    ) = get_valid_emittance_samples(
+            model,
+            scale_factor,
+            q_len,
+            distance,
+            x_tuning,
+            bounds.T,
+            meas_dim,
+            n_samples=n_samples,
+            n_steps_quad_scan=n_steps_quad_scan,
+        )
+    
+    from matplotlib import pyplot as plt
+
+    plt.hist(emits_at_target_valid.flatten().cpu(), density=True)
+    plt.xlabel('Predicted Optimal Emittance')
+    plt.ylabel('Probability Density')
+    plt.show()
+    print('sample validity rate:', sample_validity_rate)
+
+# +
+# def plot_model_cross_section(model, scan_dict):

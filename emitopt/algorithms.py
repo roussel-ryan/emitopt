@@ -320,8 +320,6 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
 
         (
             emits_at_target_valid,
-            emits_sq_at_target,
-            is_valid,
             sample_validity_rate,
         ) = get_valid_emittance_samples(
             model,
@@ -338,8 +336,6 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
         return (
             x_tuned,
             emits_at_target_valid,
-            emits_sq_at_target,
-            is_valid,
             sample_validity_rate,
         )
 

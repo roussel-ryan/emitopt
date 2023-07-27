@@ -179,7 +179,8 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
             x_tuning_init.detach().cpu().numpy(),
             jac=target_jac,
             bounds=tuning_domain.repeat(self.n_samples, 1).detach().cpu().numpy(),
-            options={"eps": 1e-03},
+#             options={"maxiter": 100},
+#             options={"eps": 1.e-3},
         )
         if verbose:
             print(

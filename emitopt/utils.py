@@ -834,13 +834,13 @@ def get_quad_strength_conversion_factor(E=0.135, q_len=0.108):
     return conversion_factor
 
 
-def plot_sample_optima_dist_inputs(results, tuning_parameter_names=None):
+def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None):
     ndim = results[1]["x_stars_all"].shape[1]
     niter = max(results.keys())
     nsamples = results[1]["x_stars_all"].shape[0]
 
     if tuning_parameter_names is None:
-        tuning_parameter_names = ['tuning_parameter_' + str(i) for i in range(ndim)]
+        tuning_parameter_names = ['tp_' + str(i) for i in range(ndim)]
 
     from matplotlib import pyplot as plt
     
@@ -865,9 +865,10 @@ def plot_sample_optima_dist_inputs(results, tuning_parameter_names=None):
             ax.scatter(torch.tensor([key]).repeat(torch.sum(is_valid)), 
                        torch.index_select(results[key]["x_stars_all"], dim=0, index=valid_ids)[:,i],
                        c='C0')
+    plt.tight_layout()
 
 
-def plot_sample_optima_dist_emits(results):
+def plot_sample_optima_convergence_emits(results):
     niter = max(results.keys())
     nsamples = results[1]["emit_stars_all"].shape[0]
     
@@ -884,6 +885,7 @@ def plot_sample_optima_dist_emits(results):
         ax.scatter(torch.tensor([key]).repeat(torch.sum(is_valid)), 
                    torch.index_select(results[key]["emit_stars_all"], dim=0, index=valid_ids)[:,0].detach(), 
                    c='C0')
+    plt.tight_layout()
 
 
 def plot_valid_emit_prediction_at_x_tuning(model, 
@@ -915,6 +917,7 @@ def plot_valid_emit_prediction_at_x_tuning(model,
     plt.hist(emits_at_target_valid.flatten().cpu(), density=True)
     plt.xlabel('Predicted Optimal Emittance')
     plt.ylabel('Probability Density')
+    plt.tight_layout()
     plt.show()
     print('sample validity rate:', sample_validity_rate)
 

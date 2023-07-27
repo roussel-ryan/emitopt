@@ -114,7 +114,7 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
         return xs_exe, ys_exe, results_dict
 
     def get_sample_optimal_tuning_configs(
-        self, model: Model, bounds: Tensor, verbose=False, cpu=False
+        self, model: Model, bounds: Tensor, verbose=False, cpu=False, positivity_constraint=True
     ):
         temp_id = self.meas_dim + 1
         tuning_domain = torch.cat((bounds.T[: self.meas_dim], bounds.T[temp_id:]))
@@ -147,6 +147,7 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
                     torch.tensor(x_tuning_flat),
                     self.meas_dim,
                     x_meas.cpu(),
+                    positivity_constraint=positivity_constraint,
                 )
                 .detach()
                 .cpu()
@@ -162,6 +163,7 @@ class ScipyMinimizeEmittance(Algorithm, ABC):
                 x_tuning_flat,
                 self.meas_dim,
                 x_meas.cpu(),
+                positivity_constraint=positivity_constraint,
             )
 
         def target_jac(x):

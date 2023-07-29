@@ -464,7 +464,7 @@ def bmag_from_emittance_fit(k, q_len, d, sig, beta0=1., alpha0=0.):
         
     Returns: 
         
-        best_bmag_val: 1d tensor shape (n_scans,)
+        bmag_min: tensor shape (n_scans, 1) containing the lowest bmag value from each quad scan
     
     '''
     # get twiss (before quad) from sig (also before quad)
@@ -525,11 +525,9 @@ def bmag_from_emittance_fit(k, q_len, d, sig, beta0=1., alpha0=0.):
     # result shape (n_scans, n_steps_quad_scan)
     
     # select minimum bmag from quad scan
-    bmag_min = torch.min(bmag, dim=1, keepdim=True) # result shape (n_scans, 1) 
-    
-    best_bmag_val = bmag_min[0]
-    
-    return best_bmag_val
+    bmag_min = torch.min(bmag, dim=1, keepdim=True)[0] # result shape (n_scans, 1) 
+        
+    return bmag_min
 
 
 def compute_emit_from_single_beamsize_scan_numpy(

@@ -279,7 +279,7 @@ def post_mean_emit_squared(
         emit_squared,
         is_valid,
         abc_k_space,
-        sigma,
+        sig,
     ) = compute_emits(k_meas, ys_batch, q_len, distance)
 
     return emit_squared, is_valid
@@ -331,7 +331,7 @@ def get_meas_scan_inputs_from_tuning_configs(meas_dim, x_tuning, x_meas):
     return xs
 
 
-def compute_emits(k, y_batch, q_len, distance):
+def compute_emits(k, y_batch, q_len, distance, ):
     """
     A function that computes the emittance(s) corresponding to a set of quadrupole measurement scans.
 
@@ -358,8 +358,8 @@ def compute_emits(k, y_batch, q_len, distance):
         abc_k_space: tensor, shape (n_scans x 3), containing parabola fit coefficients
                         in k-space (geometric focusing strength)
 
-        sigma: tensor, shape (n_scans x 2 x 2), containing the computed 2x2 beam matrices corresponding
-                to each measurement scan
+        sig: tensor, shape (n_scans x 3 x 1), containing the computed sig11, sig12, sig22
+                corresponding to each measurement scan
 
     NOTE: every measurement scan is assumed to have been evaluated
             at the single set of measurement param inputs described by k
@@ -439,7 +439,97 @@ def compute_emits(k, y_batch, q_len, distance):
         dim=1,
     )
 
-    return emit_squared, is_valid, abc_k_space, sigma
+    return emit_squared, is_valid, abc_k_space, sig
+
+
+def bmag_from_emittance_fit(k, q_len, d, sig, beta0=1., alpha0=0.):
+    '''
+    Parameters:
+
+        k: 1d tensor of shape (n_steps_quad_scan,)
+            representing the measurement quad geometric focusing strengths in [m^-2]
+            used in the emittance scan
+            
+        q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
+
+        d: the longitudinal distance (drift length) in [m] from the measurement
+                    quadrupole to the observation screen
+                    
+        sig: tensor, shape (n_scans x 3 x 1), containing the computed sig11, sig12, sig22
+                corresponding to each measurement scan
+                
+        beta0: the design beta twiss parameter at the screen
+        
+        alpha0: the design alpha twiss parameter at the screen
+        
+    Returns: 
+        
+        best_bmag_val: 1d tensor shape (n_scans,)
+    
+    '''
+    # get twiss (before quad) from sig (also before quad)
+    emits = torch.sqrt(sig[:,0,0]*sig[:,2,0] - sig[:,1,0]**2).reshape(-1,1,1)
+    temp = torch.tensor([[[1., 0., 0.],
+                       [0., -1., 0.],
+                       [0., 0., 1.]]]).double()
+    twiss_before_quad = (temp @ sig)/emits # will be shape (n_scans x 3 x 1)
+    
+    # construct drift space transport matrix
+    drift_transport = torch.tensor([[[1., -2*d, d**2],
+                                    [0., 1., -d],
+                                    [0., 0., 1.]]]).double()
+    
+    # construct/collect quad transport matrices
+    quad_transport = torch.tensor([])
+    for j in k:
+        if j > 0:
+            c, s, cp, sp = (
+                            torch.cos(j.sqrt()*q_len), 
+                            1./j.sqrt() * torch.sin(j.sqrt()*q_len),
+                            -j.sqrt() * torch.sin(j.sqrt()*q_len), 
+                            torch.cos(j.sqrt()*q_len)
+                           )
+        elif j < 0:
+            c, s, cp, sp = (
+                            torch.cosh(j.abs().sqrt()*q_len), 
+                            1./j.abs().sqrt() * torch.sinh(j.abs().sqrt()*q_len),
+                            -(j.abs().sqrt()) * torch.sinh(j.abs().sqrt()*q_len), 
+                            torch.cosh(j.abs().sqrt()*q_len)
+                           )
+        elif j == 0:
+            c, s, cp, sp = (1., q_len, 0., 1.)
+
+        quad_transport = torch.cat((quad_transport, torch.tensor([[[c**2, -2*c*s, s**2],
+                                                                   [-c*cp, c*sp + cp*s, -s*sp],
+                                                                   [cp**2, -2*cp*sp, sp**2]]]
+                                                                ).double()
+                                ))
+    quad_transport = quad_transport.unsqueeze(0)
+    
+    # transport twiss through quad
+    twiss_after_quad = quad_transport @ twiss_before_quad.reshape(-1,1,3,1) # shapes (1, n_steps_quad_scan, 3, 3) // (n_scans, 1, 3, 1)
+    # result shape (n_scans, n_steps_quad_scan, 3, 1)
+    
+    # transport twiss to screen
+    twiss_at_screen = drift_transport @ twiss_after_quad # shapes (1, 3, 3) // (n_scans, n_steps_quad_scan, 3, 1)
+    # result shape (n_scans, n_steps_quad_scan, 3, 1)
+    
+    # get design gamma0 from design beta0, alpha0
+    gamma0 = (1 + alpha0**2) / beta0
+    
+    # calculate bmag
+    bmag = 0.5 * (twiss_at_screen[:,:,0,0] * gamma0
+                    - 2 * twiss_at_screen[:,:,1,0] * alpha0
+                    + twiss_at_screen[:,:,2,0] * beta0
+                   )
+    # result shape (n_scans, n_steps_quad_scan)
+    
+    # select minimum bmag from quad scan
+    bmag_min = torch.min(bmag, dim=1, keepdim=True) # result shape (n_scans, 1) 
+    
+    best_bmag_val = bmag_min[0]
+    
+    return best_bmag_val
 
 
 def compute_emit_from_single_beamsize_scan_numpy(
@@ -473,6 +563,8 @@ def compute_emit_from_single_beamsize_scan_numpy(
         emit: the computed emittance from a simple parabolic fit to each measurement scan
         (can be NaN if the parabolic fit is not physical)
 
+        sig: tensor, shape (n_scans x 3 x 1), containing the computed sig11, sig12, sig22
+                corresponding to each measurement scan
 
     NOTE: every measurement scan is assumed to have been evaluated
     at the single set of measurement param inputs described by k
@@ -487,7 +579,7 @@ def compute_emit_from_single_beamsize_scan_numpy(
     k = torch.tensor(k, **tkwargs)
     y = torch.tensor(y, **tkwargs)
 
-    (emit_squared, is_valid, abc, sigma) = compute_emits(
+    (emit_squared, is_valid, abc, sig) = compute_emits(
         k, y.pow(2).reshape(1, -1), q_len, distance
     )
     emit = emit_squared.sqrt()
@@ -499,7 +591,7 @@ def compute_emit_from_single_beamsize_scan_numpy(
         emit.detach().numpy(),
         is_valid.detach().numpy(),
         abc.detach().numpy(),
-        sigma.detach().numpy(),
+        sig.detach().numpy(),
     )
 
 
@@ -634,9 +726,10 @@ def get_valid_emit_samples_from_quad_scan(
     Returns:
         emits_valid: a tensor of physically valid emittance results from sampled measurement scans.
 
-        sigmas_valid: a tensor containing the 2x2 beam (sigma) matrices used to compute the emittance.
-                        only the physically valid results are returned.
-
+        sig_valid: tensor, shape (n_valid_scans x 3 x 1), containing the computed 
+                        sig11, sig12, sig22 corresponding to each physically valid
+                        measurement scan
+                        
         sample_validity_rate: a float between 0 and 1 that describes the rate at which the samples
                                 were physically valid/retained.
     """
@@ -655,7 +748,7 @@ def get_valid_emit_samples_from_quad_scan(
         tkwargs=tkwargs
     )
     
-    (emits_sq, is_valid, abc_k_space, sigmas) = compute_emits(
+    (emits_sq, is_valid, abc_k_space, sig) = compute_emits(
         k_virtual, bss, q_len, distance
     )
     sample_validity_rate = (torch.sum(is_valid) / is_valid.shape[0]).reshape(1)
@@ -664,12 +757,12 @@ def get_valid_emit_samples_from_quad_scan(
     emits_sq_valid = torch.index_select(emits_sq, dim=0, index=cut_ids)
     emits_valid = emits_sq_valid.sqrt()
     abc_valid = torch.index_select(abc_k_space, dim=0, index=cut_ids)
-    sigmas_valid = torch.index_select(sigmas, dim=0, index=cut_ids)
+    sig_valid = torch.index_select(sig, dim=0, index=cut_ids)
 
     if visualize:
         plot_parabolic_fits(k, y, abc_valid, ci=0.95, tkwargs=tkwargs)
 
-    return emits_valid, sigmas_valid, sample_validity_rate
+    return emits_valid, sig_valid, sample_validity_rate
 
 
 # -
@@ -795,7 +888,7 @@ def get_valid_emittance_samples(
     bss = p.sample(torch.Size([n_samples])).reshape(-1, n_steps_quad_scan)
 
     ks = x_meas * scale_factor
-    (emits_sq_at_target, is_valid, abc_k_space, sigmas) = compute_emits(
+    (emits_sq_at_target, is_valid, abc_k_space, sig) = compute_emits(
         ks, bss, q_len, distance
     )
     sample_validity_rate = (torch.sum(is_valid) / is_valid.shape[0]).reshape(1)

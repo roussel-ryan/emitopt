@@ -955,12 +955,15 @@ def get_valid_emit_bmag_samples_from_quad_scan(
     Returns:
         emits_valid: a tensor of physically valid emittance results from sampled measurement scans.
 
+        bmag_valid: (n_valid_scans x 1) containing the bmag corresponding to the optimal point 
+                        from each physically valid fit.
+
         sig_valid: tensor, shape (n_valid_scans x 3 x 1), containing the computed 
                         sig11, sig12, sig22 corresponding to each physically valid
-                        measurement scan
-                        
+                        fit.
+
         sample_validity_rate: a float between 0 and 1 that describes the rate at which the samples
-                                were physically valid/retained.
+                        were physically valid/retained.
     """
     if tkwargs is None:
         tkwargs = {"dtype": torch.double, "device": "cpu"}

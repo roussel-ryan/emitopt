@@ -495,20 +495,14 @@ def compute_emit_bmag_thick_quad(k, y_batch, q_len, rmat_quad_to_screen, beta0=1
     is_valid = torch.logical_and(sig[:,0,0] > 0, sig[:,2,0] > 0) # result 1d tensor
     is_valid = torch.logical_and(is_valid, ~torch.isnan(emit.flatten())) # result 1d tensor
     
-    # compute bmag
-    temp = torch.tensor([[[1., 0., 0.],
-                           [0., -1., 0.],
-                           [0., 0., 1.]]]).double()
-    twiss_before_quad = (temp @ sig)/emit.unsqueeze(-1) # result shape (n_scans x 3 x 1)
-    
-    twiss_transport = twiss_transport_mat_from_rmat(total_rmats) # result shape (len(k) x 3 x 3)
-    
-    twiss_at_screen = twiss_transport.unsqueeze(0) @ twiss_before_quad.unsqueeze(1)
+    # propagate beam parameters to screen
+    twiss_at_screen = propagate_sig(sig, emit, total_rmats)[1]
     # result shape (n_scans x len(k) x 3 x 1)
     
     # get design gamma0 from design beta0, alpha0
     gamma0 = (1 + alpha0**2) / beta0
     
+    # compute bmag
     bmag = 0.5 * (twiss_at_screen[:,:,0,0] * gamma0
                 - 2 * twiss_at_screen[:,:,1,0] * alpha0
                 + twiss_at_screen[:,:,2,0] * beta0
@@ -521,6 +515,23 @@ def compute_emit_bmag_thick_quad(k, y_batch, q_len, rmat_quad_to_screen, beta0=1
     return emit, bmag_min, sig, is_valid
 
 
+def propagate_sig(sig_init, emit, rmat):
+    temp = torch.tensor([[[1., 0., 0.],
+                           [0., -1., 0.],
+                           [0., 0., 1.]]]).double()
+    twiss_init = (temp @ sig_init)/emit.unsqueeze(-1) # result shape (len(sig_init) x 3 x 1)
+    
+    twiss_transport = twiss_transport_mat_from_rmat(rmat) # result shape (len(rmat) x 3 x 3)
+
+    twiss_final = twiss_transport.unsqueeze(0) @ twiss_init.unsqueeze(1)
+    # result shape (len(sig_init) x len(rmat) x 3 x 1)
+
+    sig_final = (temp.unsqueeze(0) @ twiss_final) * emit.reshape(-1,1,1,1) 
+    # result shape (len(sig_init) x len(rmat) x 3 x 1)
+    
+    return sig_final, twiss_final
+
+
 def twiss_transport_mat_from_rmat(rmat):
     rmat = rmat.reshape(-1,2,2)
     twiss_transport = torch.tensor([])
@@ -531,7 +542,7 @@ def twiss_transport_mat_from_rmat(rmat):
                                                                    [-c*cp, c*sp + cp*s, -s*sp],
                                                                    [cp**2, -2*cp*sp, sp**2]]]
                                                                 ).double()
-                            ))
+                                    ))
     return twiss_transport
 
 
@@ -722,8 +733,13 @@ def compute_emit_from_single_beamsize_scan_numpy(
     )
 
 
+# +
+from botorch.models.gp_regression import SingleTaskGP
+from botorch.models.transforms import Normalize, Standardize
 from botorch import fit_gpytorch_mll
-
+from gpytorch import ExactMarginalLogLikelihood
+from gpytorch.kernels import MaternKernel, PolynomialKernel, ScaleKernel
+from gpytorch.priors import GammaPrior
 
 def fit_gp_quad_scan(
     k,
@@ -797,13 +813,7 @@ def fit_gp_quad_scan(
     return k_virtual, bss
 
 
-# +
-from botorch.models.gp_regression import SingleTaskGP
-from botorch.models.transforms import Normalize, Standardize
-from gpytorch import ExactMarginalLogLikelihood
-from gpytorch.kernels import MaternKernel, PolynomialKernel, ScaleKernel
-from gpytorch.priors import GammaPrior
-
+# -
 
 def get_valid_emit_samples_from_quad_scan(
     k,
@@ -892,7 +902,164 @@ def get_valid_emit_samples_from_quad_scan(
     return emits_valid, sig_valid, sample_validity_rate
 
 
-# -
+def get_valid_emit_bmag_samples_from_quad_scan(
+    k,
+    y,
+    q_len,
+    distance,
+    beta0=1.,
+    alpha0=0.,
+    n_samples=10000,
+    n_steps_quad_scan=10,
+    covar_module=None,
+    visualize=False,
+    tkwargs=None,
+):
+    """
+    A function that produces a distribution of possible (physically valid) emittance values corresponding
+    to a single quadrupole measurement scan. Data is first modeled by a SingleTaskGP, virtual measurement
+    scan samples are then drawn from the model posterior, unconstrained parabolic fits are performed on
+    the virtual scan results, and physically invalid results are discarded.
+
+    Parameters:
+
+        k: 1d numpy array of shape (n_steps_quad_scan,)
+        representing the measurement quad geometric focusing strengths in [m^-2]
+        used in the emittance scan
+
+        y: 1d numpy array of shape (n_steps_quad_scan, )
+            representing the beam size measurements (NOT SQUARED) in [m] of an emittance scan
+            with inputs given by k
+            
+        covar_module: the covariance module to be used in fitting of the SingleTaskGP 
+                    (modeling the function y**2 vs. k)
+                    If None, uses ScaleKernel(MaternKernel()).
+
+        visualize: boolean. Set to True to plot the parabolic fitting results.
+
+        tkwargs: dict containing the tensor device and dtype
+
+        q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
+
+        distance: the longitudinal distance (drift length) in [m] from the measurement
+                    quadrupole to the observation screen
+
+        n_samples: the number of virtual measurement scan samples to evaluate for our "Bayesian" estimate
+
+        n_steps_quad_scan: the number of steps in our virtual measurement scans
+
+
+    Returns:
+        emits_valid: a tensor of physically valid emittance results from sampled measurement scans.
+
+        sig_valid: tensor, shape (n_valid_scans x 3 x 1), containing the computed 
+                        sig11, sig12, sig22 corresponding to each physically valid
+                        measurement scan
+                        
+        sample_validity_rate: a float between 0 and 1 that describes the rate at which the samples
+                                were physically valid/retained.
+    """
+    if tkwargs is None:
+        tkwargs = {"dtype": torch.double, "device": "cpu"}
+
+    k = torch.tensor(k, **tkwargs)
+    y = torch.tensor(y, **tkwargs)
+
+    k_virtual, bss = fit_gp_quad_scan(
+        k=k,
+        y=y,
+        n_samples=n_samples,
+        n_steps_quad_scan=n_steps_quad_scan,
+        covar_module=covar_module,
+        tkwargs=tkwargs
+    )
+    
+    drift_rmat = build_quad_rmat(k=torch.tensor([0.]), q_len=distance)
+    (emit, bmag, sig, is_valid) = compute_emit_bmag_thick_quad(k=k_virtual, 
+                                                                          y_batch=bss, 
+                                                                          q_len=q_len, 
+                                                                          rmat_quad_to_screen=drift_rmat, 
+                                                                          beta0=beta0, 
+                                                                          alpha0=alpha0)
+
+    sample_validity_rate = (torch.sum(is_valid) / is_valid.shape[0]).reshape(1)
+
+    # filter on physical validity
+    cut_ids = torch.tensor(range(emit.shape[0]))[is_valid]
+    emit_valid = torch.index_select(emit, dim=0, index=cut_ids)
+    bmag_valid = torch.index_select(bmag, dim=0, index=cut_ids)
+    sig_valid = torch.index_select(sig, dim=0, index=cut_ids)
+
+    if visualize:
+        plot_valid_thick_quad_fits(k=k, 
+                                   y=y, 
+                                   sig=sig_valid, 
+                                   emit=emit_valid, 
+                                   q_len=q_len, 
+                                   rmat_quad_to_screen=drift_rmat
+                                  )
+    return emit_valid, bmag_valid, sig_valid, sample_validity_rate
+
+
+def plot_valid_thick_quad_fits(k, y, sig, emit, q_len, rmat_quad_to_screen, ci=0.95, tkwargs=None):
+    """
+    A function to plot the parabolic fits produced as a necessary step in the compute_emits() function.
+
+    Parameters:
+
+        k: 1d numpy array of shape (n_steps_quad_scan,)
+        representing the measurement quad geometric focusing strengths in [m^-2]
+        used in the emittance scan
+
+        y: 1d numpy array of shape (n_steps_quad_scan, )
+            representing the beam size measurements (NOT SQUARED) in [m] of an emittance scan
+            with inputs given by k
+
+        sig: tensor, shape (n_scans x 3 x 1), containing the computed sig11, sig12, sig22
+                corresponding to each measurement scan
+                
+        emit: shape (n_scans x 1) containing the geometric emittance fit results for each scan
+
+        q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
+
+        rmat_quad_to_screen: the (fixed) 2x2 R matrix describing the transport from the end of the 
+                measurement quad to the observation screen.
+                
+        ci: "Confidence interval" for plotting upper/lower quantiles.
+
+        tkwargs: dict containing the tensor device and dtype
+    """
+    from matplotlib import pyplot as plt
+
+    if tkwargs is None:
+        tkwargs = {"dtype": torch.double, "device": "cpu"}
+
+    k_fit = torch.linspace(k.min(), k.max(), 10, **tkwargs)
+    quad_rmats = build_quad_rmat(k_fit, q_len) # result shape (len(k_fit) x 2 x 2)
+    total_rmats = rmat_quad_to_screen.reshape(1,2,2) @ quad_rmats # result shape (len(k_fit) x 2 x 2)
+    sig_final = propagate_sig(sig, emit, total_rmats)[0] # result shape len(sig) x len(k_fit) x 3 x 1
+    bss_fit = sig_final[:,:,0,0]
+
+    upper_quant = torch.quantile(bss_fit, q=0.5 + ci / 2.0, dim=0)
+    lower_quant = torch.quantile(bss_fit, q=0.5 - ci / 2.0, dim=0)
+    fit = plt.fill_between(
+        k_fit.detach().numpy(),
+        lower_quant,
+        upper_quant,
+        alpha=0.3,
+        label='"Bayesian" Fit',
+        zorder=1,
+    )
+    
+    obs = plt.scatter(
+        k, y.pow(2), marker="x", s=120, c="orange", label="Measurements", zorder=2
+    )
+    plt.title("Validated Thick-Quad Fits")
+    plt.xlabel("Measurement Quad Geometric Focusing Strength (k)")
+    plt.ylabel("Beam Size Squared")
+    plt.legend(handles=[obs, fit])
+    plt.show()
+    plt.close()
 
 
 def plot_parabolic_fits(k, y, abc, ci=0.95, tkwargs=None):

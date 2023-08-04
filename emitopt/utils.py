@@ -918,8 +918,8 @@ def get_valid_emit_bmag_samples_from_quad_scan(
     """
     A function that produces a distribution of possible (physically valid) emittance values corresponding
     to a single quadrupole measurement scan. Data is first modeled by a SingleTaskGP, virtual measurement
-    scan samples are then drawn from the model posterior, unconstrained parabolic fits are performed on
-    the virtual scan results, and physically invalid results are discarded.
+    scan samples are then drawn from the model posterior, the samples are modeled by thick-quad transport
+    to obtain fits to the beam parameters, and physically invalid results are discarded.
 
     Parameters:
 
@@ -930,7 +930,20 @@ def get_valid_emit_bmag_samples_from_quad_scan(
         y: 1d numpy array of shape (n_steps_quad_scan, )
             representing the beam size measurements (NOT SQUARED) in [m] of an emittance scan
             with inputs given by k
-            
+
+        q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
+
+        distance: the longitudinal distance (drift length) in [m] from the measurement
+                    quadrupole to the observation screen
+
+        beta0: the design beta twiss parameter at the screen
+        
+        alpha0: the design alpha twiss parameter at the screen
+        
+        n_samples: the number of virtual measurement scan samples to evaluate for our "Bayesian" estimate
+
+        n_steps_quad_scan: the number of steps in our virtual measurement scans
+
         covar_module: the covariance module to be used in fitting of the SingleTaskGP 
                     (modeling the function y**2 vs. k)
                     If None, uses ScaleKernel(MaternKernel()).
@@ -938,16 +951,6 @@ def get_valid_emit_bmag_samples_from_quad_scan(
         visualize: boolean. Set to True to plot the parabolic fitting results.
 
         tkwargs: dict containing the tensor device and dtype
-
-        q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
-
-        distance: the longitudinal distance (drift length) in [m] from the measurement
-                    quadrupole to the observation screen
-
-        n_samples: the number of virtual measurement scan samples to evaluate for our "Bayesian" estimate
-
-        n_steps_quad_scan: the number of steps in our virtual measurement scans
-
 
     Returns:
         emits_valid: a tensor of physically valid emittance results from sampled measurement scans.
@@ -1003,7 +1006,8 @@ def get_valid_emit_bmag_samples_from_quad_scan(
 
 def plot_valid_thick_quad_fits(k, y, sig, emit, q_len, rmat_quad_to_screen, ci=0.95, tkwargs=None):
     """
-    A function to plot the parabolic fits produced as a necessary step in the compute_emits() function.
+    A function to plot the physically valid beam size squared fit results
+    produced by get_valid_emit_bmag_samples_from_quad_scan().
 
     Parameters:
 

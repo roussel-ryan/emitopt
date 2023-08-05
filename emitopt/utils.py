@@ -341,7 +341,7 @@ def compute_emits(k, y_batch, q_len, distance, ):
             used in the emittance scan
 
         y_batch: 2d torch tensor of shape (n_scans x n_steps_quad_scan),
-                where each row represents the (r.m.s. beamsize)^2 outputs in [m^2] of an emittance scan
+                where each row represents the mean-square beamsize outputs in [m^2] of an emittance scan
                 with inputs given by k
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
@@ -453,7 +453,7 @@ def compute_emit_bmag_thick_quad(k, y_batch, q_len, rmat_quad_to_screen, beta0=1
             used in the emittance scan
 
         y_batch: 2d torch tensor of shape (n_scans x n_steps_quad_scan),
-                where each row represents the (r.m.s. beamsize)^2 outputs in [m^2] of an emittance scan
+                where each row represents the mean-square beamsize outputs in [m^2] of an emittance scan
                 with inputs given by k
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
@@ -684,7 +684,7 @@ def compute_emit_from_single_beamsize_scan_numpy(
         used in the emittance scan
 
         y: 1d numpy array of shape (n_steps_quad_scan, )
-            representing the beam size measurements (NOT SQUARED) in [m] of an emittance scan
+            representing the root-mean-square beam size measurements in [m] of an emittance scan
             with inputs given by k
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
@@ -763,7 +763,7 @@ def fit_gp_quad_scan(
         used in the emittance scan
 
         y: 1d numpy array of shape (n_steps_quad_scan, )
-            representing the beam size measurements (NOT SQUARED) in [m] of an emittance scan
+            representing the root-mean-square beam size measurements in [m] of an emittance scan
             with inputs given by k
             
         covar_module: the covariance module to be used in fitting of the SingleTaskGP 
@@ -840,7 +840,7 @@ def get_valid_emit_samples_from_quad_scan(
         used in the emittance scan
 
         y: 1d numpy array of shape (n_steps_quad_scan, )
-            representing the beam size measurements (NOT SQUARED) in [m] of an emittance scan
+            representing the root-mean-square beam size measurements in [m] of an emittance scan
             with inputs given by k
             
         covar_module: the covariance module to be used in fitting of the SingleTaskGP 
@@ -929,7 +929,7 @@ def get_valid_emit_bmag_samples_from_quad_scan(
         used in the emittance scan
 
         y: 1d numpy array of shape (n_steps_quad_scan, )
-            representing the beam size measurements (NOT SQUARED) in [m] of an emittance scan
+            representing the root-mean-square beam size measurements in [m] of an emittance scan
             with inputs given by k
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
@@ -1021,7 +1021,7 @@ def plot_valid_thick_quad_fits(k, y, q_len, rmat_quad_to_screen, emit, bmag, sig
         used in the emittance scan
 
         y: 1d numpy array of shape (n_steps_quad_scan, )
-            representing the beam size measurements (NOT SQUARED) in [m] of an emittance scan
+            representing the root-mean-square beam size measurements in [m] of an emittance scan
             with inputs given by k
 
         sig: tensor, shape (n_scans x 3 x 1), containing the computed sig11, sig12, sig22
@@ -1070,7 +1070,7 @@ def plot_valid_thick_quad_fits(k, y, q_len, rmat_quad_to_screen, emit, bmag, sig
     )
     ax.set_title("Beam Size at Screen")
     ax.set_xlabel(r"Measurement Quad Geometric Focusing Strength ($[k]=m^{-2}$)")
-    ax.set_ylabel(r"R.M.S. Beam Size ($[\sigma]=\mu m$)")
+    ax.set_ylabel(r"r.m.s. Beam Size ($[\sigma]=\mu m$)")
     ax.legend(handles=[obs, fit])
     
     ax=axs[1]

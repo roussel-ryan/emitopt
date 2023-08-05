@@ -733,6 +733,7 @@ def compute_emit_from_single_beamsize_scan_numpy(
     )
 
 
+
 # +
 from botorch.models.gp_regression import SingleTaskGP
 from botorch.models.transforms import Normalize, Standardize
@@ -982,11 +983,11 @@ def get_valid_emit_bmag_samples_from_quad_scan(
     
     drift_rmat = build_quad_rmat(k=torch.tensor([0.]), q_len=distance)
     (emit, bmag, sig, is_valid) = compute_emit_bmag_thick_quad(k=k_virtual, 
-                                                                          y_batch=bss, 
-                                                                          q_len=q_len, 
-                                                                          rmat_quad_to_screen=drift_rmat, 
-                                                                          beta0=beta0, 
-                                                                          alpha0=alpha0)
+                                                              y_batch=bss, 
+                                                              q_len=q_len, 
+                                                              rmat_quad_to_screen=drift_rmat, 
+                                                              beta0=beta0, 
+                                                              alpha0=alpha0)
 
     sample_validity_rate = (torch.sum(is_valid) / is_valid.shape[0]).reshape(1)
 
@@ -999,17 +1000,18 @@ def get_valid_emit_bmag_samples_from_quad_scan(
     if visualize:
         plot_valid_thick_quad_fits(k=k, 
                                    y=y, 
-                                   sig=sig_valid, 
-                                   emit=emit_valid, 
                                    q_len=q_len, 
-                                   rmat_quad_to_screen=drift_rmat
+                                   rmat_quad_to_screen=drift_rmat,
+                                   emit=emit_valid, 
+                                   bmag=bmag_valid,
+                                   sig=sig_valid, 
                                   )
     return emit_valid, bmag_valid, sig_valid, sample_validity_rate
 
 
-def plot_valid_thick_quad_fits(k, y, sig, emit, q_len, rmat_quad_to_screen, ci=0.95, tkwargs=None):
+def plot_valid_thick_quad_fits(k, y, q_len, rmat_quad_to_screen, emit, bmag, sig, ci=0.95, tkwargs=None):
     """
-    A function to plot the physically valid beam size squared fit results
+    A function to plot the physically valid fit results
     produced by get_valid_emit_bmag_samples_from_quad_scan().
 
     Parameters:
@@ -1047,24 +1049,43 @@ def plot_valid_thick_quad_fits(k, y, sig, emit, q_len, rmat_quad_to_screen, ci=0
     sig_final = propagate_sig(sig, emit, total_rmats)[0] # result shape len(sig) x len(k_fit) x 3 x 1
     bss_fit = sig_final[:,:,0,0]
 
-    upper_quant = torch.quantile(bss_fit, q=0.5 + ci / 2.0, dim=0)
-    lower_quant = torch.quantile(bss_fit, q=0.5 - ci / 2.0, dim=0)
-    fit = plt.fill_between(
+    upper_quant = torch.quantile(bss_fit.sqrt(), q=0.5 + ci / 2.0, dim=0)
+    lower_quant = torch.quantile(bss_fit.sqrt(), q=0.5 - ci / 2.0, dim=0)
+    
+    fig, axs = plt.subplots(3)
+    fig.set_size_inches(5,9)
+    
+    ax=axs[0]
+    fit = ax.fill_between(
         k_fit.detach().numpy(),
-        lower_quant,
-        upper_quant,
+        lower_quant*1.e6,
+        upper_quant*1.e6,
         alpha=0.3,
-        label='"Bayesian" Fit',
+        label='"Bayesian" Thick-Quad Model',
         zorder=1,
     )
     
-    obs = plt.scatter(
-        k, y.pow(2), marker="x", s=120, c="orange", label="Measurements", zorder=2
+    obs = ax.scatter(
+        k, y*1.e6, marker="x", s=120, c="orange", label="Measurements", zorder=2
     )
-    plt.title("Validated Thick-Quad Fits")
-    plt.xlabel("Measurement Quad Geometric Focusing Strength (k)")
-    plt.ylabel("Beam Size Squared")
-    plt.legend(handles=[obs, fit])
+    ax.set_title("Beam Size at Screen")
+    ax.set_xlabel(r"Measurement Quad Geometric Focusing Strength ($[k]=m^{-2}$)")
+    ax.set_ylabel(r"R.M.S. Beam Size ($[\sigma]=\mu m$)")
+    ax.legend(handles=[obs, fit])
+    
+    ax=axs[1]
+    ax.hist(emit.flatten(), density=True)
+    ax.set_title('Geometric Emittance Distribution')
+    ax.set_xlabel(r'Geometric Emittance ($[\epsilon]=m*rad$)')
+    ax.set_ylabel('Probability Density')
+    
+    ax=axs[2]
+    ax.hist(bmag.flatten(), range=(1,5), bins=20, density=True)
+    ax.set_title(r'$\beta_{mag}$ Distribution')
+    ax.set_xlabel(r'$\beta_{mag}$ at Screen')
+    ax.set_ylabel('Probability Density')
+    
+    plt.tight_layout()
     plt.show()
     plt.close()
 

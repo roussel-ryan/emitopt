@@ -232,6 +232,121 @@ def post_path_emit_squared(
     return emits_squared, is_valid
 
 
+def post_path_emit_squared_thick_quad(
+    post_paths,
+    scale_factor,
+    q_len,
+    distance,
+    x_tuning,
+    meas_dim,
+    x_meas,
+    samplewise=False,
+):
+    """
+    A function that computes the emittance squared at locations in tuning-parameter space defined by x_tuning,
+    from a set of pathwise posterior samples produced by a SingleTaskGP model of the beamsize squared
+    with respect to some tuning devices and a measurement quadrupole.
+
+    arguments:
+        post_paths: a pathwise posterior sample from a SingleTaskGP model of the beam size
+        scale_factor: (float) factor by which to multiply model measurement quadrupole inputs to get
+                        geometric focusing strengths in [m^-2]
+        q_len: (float) the longitudinal "thickness", or length, of the measurement quadrupole in [m]
+        distance: (float) the distance (drift length) from the end of the measurement quadrupole
+                    to the observation screen in [m]
+        x_tuning: tensor of shape (n_points x n_tuning_dims) where each row defines a point
+                    in tuning-parameter space at which to evaluate the emittance
+        meas_dim: the index giving the input dimension of the measurement quadrupole in our GP model
+        x_meas: a 1d tensor giving the measurement device inputs for the virtual measurement scans
+        samplewise: boolean. Set to False if you want to evaluate the emittance for every point on
+                        every sample. If set to True, the emittance for the nth sample (given by post_paths)
+                        will only be evaluated at the nth point (given by x_tuning). If samplewise is set to
+                        True, x_tuning must be shape n_samples x n_tuning_dims
+
+    returns:
+        emits_squared: a tensor containing the emittance squared results (which can be negative/invalid)
+        is_valid: a tensor of booleans, of the same shape as emits_squared, designating whether or not
+                    the corresponding entry of the emits_squared tensor is physically valid.
+    """
+
+    # get the number of points in the scan uniformly spaced along measurement domain
+    n_steps_quad_scan = len(x_meas)
+
+    # get the number of points in the tuning parameter space specified by x_tuning
+    n_tuning_configs = x_tuning.shape[0]
+
+    # get the complete tensor of inputs for a set of virtual quad measurement scans to be
+    # performed at the locations in tuning parameter space specified by x_tuning
+    xs = get_meas_scan_inputs_from_tuning_configs(meas_dim, x_tuning, x_meas)
+
+    k_meas = x_meas * scale_factor
+
+    if samplewise:
+        # add assert n_tuning_configs == post_paths.n_samples
+        xs = xs.reshape(n_tuning_configs, n_steps_quad_scan, -1)
+        ys = post_paths(xs)  # ys will be nsamples x n_steps_quad_scan
+
+        (
+            sig, 
+            is_valid
+        ) = compute_emit_bmag_thick_quad(
+            k_meas, ys, q_len, distance
+        )[-2:]
+
+        emits_squared = (sig[:,0,0]*sig[:,2,0] - sig[:,1,0]**2).reshape(-1,1)
+    else:
+        # ys will be shape n_samples x (n_tuning_configs*n_steps_quad_scan)
+        ys = post_paths(xs)
+
+        n_samples = ys.shape[0]
+
+        # reshape into batchshape x n_steps_quad_scan
+        ys = ys.reshape(n_samples * n_tuning_configs, n_steps_quad_scan)
+
+        (
+            sig, 
+            is_valid
+        ) = compute_emit_bmag_thick_quad(
+            k_meas, ys, q_len, distance
+        )[-2:]
+
+        emits_squared = (sig[:,0,0]*sig[:,2,0] - sig[:,1,0]**2).reshape(-1,1)
+        emits_squared = emits_squared.reshape(n_samples, -1)
+        is_valid = is_valid.reshape(n_samples, -1)
+
+        # emits_squared will be a tensor of
+        # shape nsamples x n_tuning_configs, where n_tuning_configs
+        # is the number of rows in the input tensor X.
+        # The nth column of the mth row represents the emittance of the mth sample,
+        # evaluated at the nth tuning config specified by the input tensor X.
+
+    return emits_squared, is_valid
+
+
+def sum_samplewise_emittance_xy_flat_input(
+    post_paths_xy, # list length 2 with the pathwise sample functions from each of the x and y beam size models (in that order)
+    scale_factor, 
+    q_len, 
+    distance, 
+    x_tuning_flat, 
+    meas_dim, 
+    x_meas, 
+):    
+    x_tuning = x_tuning_flat.double().reshape(post_paths_xy[0].n_samples, -1)
+    scale_factors = [scale_factor, -scale_factor]
+    emit_sq_x, emit_sq_y = [post_path_emit_squared_thick_quad(post_paths,
+                                                        scale_factor=sf,
+                                                        q_len=q_len,
+                                                        distance=distance,
+                                                        x_tuning=x_tuning,
+                                                        meas_dim=meas_dim,
+                                                        x_meas=x_meas,
+                                                        samplewise=True
+                                                      )[0] for sf, post_paths in zip(scale_factors, post_paths_xy)]
+    
+    return torch.sum(emit_sq_x.abs().sqrt() * emit_sq_y.abs().sqrt())
+
+
 def post_mean_emit_squared(
     model,
     scale_factor,
@@ -442,7 +557,7 @@ def compute_emits(k, y_batch, q_len, distance, ):
     return emit_squared, is_valid, abc_k_space, sig
 
 
-def compute_emit_bmag_thick_quad(k, y_batch, q_len, rmat_quad_to_screen, beta0=1., alpha0=0.):
+def compute_emit_bmag_thick_quad(k, y_batch, q_len, distance, beta0=1., alpha0=0.):
     """
     A function that computes the emittance(s) corresponding to a set of quadrupole measurement scans
     using a thick quad model.
@@ -458,6 +573,11 @@ def compute_emit_bmag_thick_quad(k, y_batch, q_len, rmat_quad_to_screen, beta0=1
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
         
+        distance: float defining the distance from the end of the measurement quadrupole to the 
+                observation screen. If there are optical elements between the quad and screen, 
+                we must replace this argument with rmat_quad_to_screen (below).
+         
+        (NOT CURRENTLY IN USE -- ASSUMED TO BE DRIFT SPACE)
         rmat_quad_to_screen: the (fixed) 2x2 R matrix describing the transport from the end of the 
                 measurement quad to the observation screen.
 
@@ -475,17 +595,18 @@ def compute_emit_bmag_thick_quad(k, y_batch, q_len, rmat_quad_to_screen, beta0=1
     """
     
     # construct the A matrix from eq. (3.2) & (3.3) of source paper
+    rmat_quad_to_screen = build_quad_rmat(k=torch.tensor([0.]), q_len=distance) # result shape 1 x 2 x 2
     quad_rmats = build_quad_rmat(k, q_len) # result shape (len(k) x 2 x 2)
     total_rmats = rmat_quad_to_screen.reshape(1,2,2) @ quad_rmats # result shape (len(k) x 2 x 2)
     
-    A = torch.tensor([])
+    amat = torch.tensor([]) # prepare the A matrix
     for rmat in total_rmats:
         r11, r12 = rmat[0,0], rmat[0,1]
-        A = torch.cat((A, torch.tensor([[r11**2, 2.*r11*r12, r12**2]])), dim=0)
-    # A result shape (len(k) x 3)
+        amat = torch.cat((amat, torch.tensor([[r11**2, 2.*r11*r12, r12**2]])), dim=0)
+    # amat result shape (len(k) x 3)
     
     # get sigma matrix elements just before measurement quad from pseudo-inverse
-    sig = A.pinverse().unsqueeze(0) @ y_batch.unsqueeze(-1) # shapes (1 x 3 x len(k)) @ (n_scans x len(k) x 1)
+    sig = amat.pinverse().unsqueeze(0) @ y_batch.unsqueeze(-1) # shapes (1 x 3 x len(k)) @ (n_scans x len(k) x 1)
     # result shape (n_scans x 3 x 1) containing column vectors of [sig11, sig12, sig22]
     
     # compute emit
@@ -731,7 +852,6 @@ def compute_emit_from_single_beamsize_scan_numpy(
         abc.detach().numpy(),
         sig.detach().numpy(),
     )
-
 
 
 # +
@@ -981,11 +1101,10 @@ def get_valid_emit_bmag_samples_from_quad_scan(
         tkwargs=tkwargs
     )
     
-    drift_rmat = build_quad_rmat(k=torch.tensor([0.]), q_len=distance)
     (emit, bmag, sig, is_valid) = compute_emit_bmag_thick_quad(k=k_virtual, 
                                                               y_batch=bss, 
                                                               q_len=q_len, 
-                                                              rmat_quad_to_screen=drift_rmat, 
+                                                              distance=distance, 
                                                               beta0=beta0, 
                                                               alpha0=alpha0)
 
@@ -1001,7 +1120,7 @@ def get_valid_emit_bmag_samples_from_quad_scan(
         plot_valid_thick_quad_fits(k=k, 
                                    y=y, 
                                    q_len=q_len, 
-                                   rmat_quad_to_screen=drift_rmat,
+                                   distance=distance,
                                    emit=emit_valid, 
                                    bmag=bmag_valid,
                                    sig=sig_valid, 
@@ -1009,7 +1128,7 @@ def get_valid_emit_bmag_samples_from_quad_scan(
     return emit_valid, bmag_valid, sig_valid, sample_validity_rate
 
 
-def plot_valid_thick_quad_fits(k, y, q_len, rmat_quad_to_screen, emit, bmag, sig, ci=0.95, tkwargs=None):
+def plot_valid_thick_quad_fits(k, y, q_len, distance, emit, bmag, sig, ci=0.95, tkwargs=None):
     """
     A function to plot the physically valid fit results
     produced by get_valid_emit_bmag_samples_from_quad_scan().
@@ -1031,6 +1150,10 @@ def plot_valid_thick_quad_fits(k, y, q_len, rmat_quad_to_screen, emit, bmag, sig
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
 
+        distance: the longitudinal distance (drift length) in [m] from the measurement
+                    quadrupole to the observation screen
+        
+        (NOT IN USE)
         rmat_quad_to_screen: the (fixed) 2x2 R matrix describing the transport from the end of the 
                 measurement quad to the observation screen.
                 
@@ -1045,6 +1168,7 @@ def plot_valid_thick_quad_fits(k, y, q_len, rmat_quad_to_screen, emit, bmag, sig
 
     k_fit = torch.linspace(k.min(), k.max(), 10, **tkwargs)
     quad_rmats = build_quad_rmat(k_fit, q_len) # result shape (len(k_fit) x 2 x 2)
+    rmat_quad_to_screen = build_quad_rmat(k=torch.tensor([0.]), q_len=distance)
     total_rmats = rmat_quad_to_screen.reshape(1,2,2) @ quad_rmats # result shape (len(k_fit) x 2 x 2)
     sig_final = propagate_sig(sig, emit, total_rmats)[0] # result shape len(sig) x len(k_fit) x 3 x 1
     bss_fit = sig_final[:,:,0,0]

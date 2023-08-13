@@ -368,6 +368,8 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
     n_steps_exe_paths: int = Field(
         11, description="number of points to retain as execution path subsequences"
     )
+    scipy_options: dict = Field(
+        None, description="options to pass to scipy minimize")
 
     def get_execution_paths(self, model: ModelList, bounds: Tensor):
         (
@@ -496,8 +498,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
             x_tuning_init.detach().cpu().numpy(),
             jac=target_jac,
             bounds=tuning_domain.repeat(self.n_samples, 1).detach().cpu().numpy(),
-#             options={"maxiter": 100},
-#             options={"eps": 1.e-3},
+            options=self.scipy_options,
         )
         if verbose:
             print(

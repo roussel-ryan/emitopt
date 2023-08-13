@@ -297,11 +297,12 @@ def post_path_emit_squared_thick_quad(
     else:
         # ys will be shape n_samples x (n_tuning_configs*n_steps_quad_scan)
         ys = post_paths(xs)
-
+        print(k_meas)
         n_samples = ys.shape[0]
 
         # reshape into batchshape x n_steps_quad_scan
         ys = ys.reshape(n_samples * n_tuning_configs, n_steps_quad_scan)
+        print(ys)
 
         (
             sig, 
@@ -397,6 +398,61 @@ def post_mean_emit_squared(
         sig,
     ) = compute_emits(k_meas, ys_batch, q_len, distance)
 
+    return emit_squared, is_valid
+
+
+def post_mean_emit_squared_thick_quad(
+    model,
+    scale_factor,
+    q_len,
+    distance,
+    x_tuning,
+    meas_dim,
+    x_meas,
+):
+    """
+    A function that computes the emittance squared at locations in tuning-parameter space defined by x_tuning,
+    using the posterior mean of model.
+
+    arguments:
+        model: a SingleTaskGP model of the beamsize squared with respect to some tuning devices
+                and a measurement quadrupole.
+        scale_factor: (float) factor by which to multiply model measurement quadrupole inputs to get
+                        geometric focusing strengths in [m^-2]
+        q_len: (float) the longitudinal "thickness", or length, of the measurement quadrupole in [m]
+        distance: (float) the distance (drift length) from the end of the measurement quadrupole
+                    to the observation screen in [m]
+        x_tuning: tensor of shape (n_points x n_tuning_dims) where each row defines a point
+                    in tuning-parameter space at which to evaluate the emittance
+        meas_dim: the index giving the input dimension of the measurement quadrupole in our GP model
+        x_meas: a 1d tensor giving the measurement device inputs for the virtual measurement scans
+        samplewise: boolean. Set to False if you want to evaluate the emittance for every point on
+                        every sample. If set to True, the emittance for the nth sample (given by post_paths)
+                        will only be evaluated at the nth point (given by x_tuning). If samplewise is set to
+                        True, x_tuning must be shape n_samples x n_tuning_dims
+
+    returns:
+        emits_squared: a tensor containing the emittance squared results (which can be negative/invalid)
+        is_valid: a tensor of booleans, of the same shape as emits_squared, designating whether or not
+                    the corresponding entry of the emits_squared tensor is physically valid.
+    """
+
+    xs = get_meas_scan_inputs_from_tuning_configs(meas_dim, x_tuning, x_meas)
+    ys = model.posterior(xs).mean
+
+    ys_batch = ys.reshape(x_tuning.shape[0], -1)
+
+    k_meas = x_meas * scale_factor
+
+    (
+        emit,
+        bmag_min,
+        sig,
+        is_valid,
+    ) = compute_emit_bmag_thick_quad(k_meas, ys_batch, q_len, distance)
+
+    emit_squared = (sig[:,0,0]*sig[:,2,0] - sig[:,1,0]**2).reshape(-1,1)
+    
     return emit_squared, is_valid
 
 

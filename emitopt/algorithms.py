@@ -449,11 +449,24 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
             cpu_model, n_samples=self.n_samples
         ) for cpu_model in cpu_models]
 
-        xs_tuning_init = unif_random_sample_domain(
-            self.n_samples, tuning_domain
-        ).double()
+        ##############
+#         xs_tuning_init = unif_random_sample_domain(
+#             self.n_samples, tuning_domain
+#         ).double()
+#         x_tuning_init = xs_tuning_init.flatten()
+        ##############
+        bss_model_x, bss_model_y = model.models
+        bss_x = bss_model_x.outcome_transform.untransform(bss_model_x.train_targets)[0]
+        bss_y = bss_model_y.outcome_transform.untransform(bss_model_y.train_targets)[0]
+        bss = torch.sqrt(bss_x * bss_y)
+        x_smallest_observed_beamsize = bss_model_x._original_train_inputs[torch.argmin(bss)].reshape(1,-1)
 
-        x_tuning_init = xs_tuning_init.flatten()
+        tuning_dims = list(range(bounds.shape[1]))
+        tuning_dims.remove(self.meas_dim)
+        tuning_dims = torch.tensor(tuning_dims)
+        x_tuning_best = torch.index_select(x_smallest_observed_beamsize, dim=1, index=tuning_dims)
+        x_tuning_init = x_tuning_best.repeat(self.n_samples,1).flatten()
+        ##############
 
         # minimize
         def target_func_for_scipy(x_tuning_flat):

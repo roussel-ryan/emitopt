@@ -1250,13 +1250,13 @@ def plot_valid_thick_quad_fits(k, y, q_len, distance, emit, bmag, sig, ci=0.95, 
     )
     ax.set_title("Beam Size at Screen")
     ax.set_xlabel(r"Measurement Quad Geometric Focusing Strength ($[k]=m^{-2}$)")
-    ax.set_ylabel(r"r.m.s. Beam Size ($[\sigma]=\mu m$)")
+    ax.set_ylabel(r"r.m.s. Beam Size")# ($[\sigma]=\mu m$)")
     ax.legend(handles=[obs, fit])
     
     ax=axs[1]
     ax.hist(emit.flatten(), density=True)
     ax.set_title('Geometric Emittance Distribution')
-    ax.set_xlabel(r'Geometric Emittance ($[\epsilon]=m*rad$)')
+    ax.set_xlabel(r'Geometric Emittance')# ($[\epsilon]=m*rad$)')
     ax.set_ylabel('Probability Density')
     
     ax=axs[2]
@@ -1512,6 +1512,13 @@ def get_quad_strength_conversion_factor(E=0.135, q_len=0.108):
     conversion_factor = 0.299 / (10.0 * q_len * beta * E)
 
     return conversion_factor
+
+
+def normalize_emittance(emit, energy):
+    gamma = energy / (0.511e-3)  # beam energy (GeV) divided by electron rest energy (GeV)
+    beta = 1.0 - 1.0 / (2 * gamma**2)
+    emit_n = gamma * beta * emit
+    return emit_n
 
 
 def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, show_valid_only=True):

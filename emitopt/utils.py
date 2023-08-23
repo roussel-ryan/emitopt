@@ -317,7 +317,7 @@ def get_meas_scan_inputs_from_tuning_configs(meas_dim, x_tuning, x_meas):
     return xs
 
 
-def compute_emit_bmag_thick_quad(k, y_batch, q_len, distance, beta0=1., alpha0=0.):
+def compute_emit_bmag_thick_quad(k, y_batch, q_len, rmat_quad_to_screen, beta0=1., alpha0=0.):
     """
     A function that computes the emittance(s) corresponding to a set of quadrupole measurement scans
     using a thick quad model.
@@ -333,12 +333,7 @@ def compute_emit_bmag_thick_quad(k, y_batch, q_len, distance, beta0=1., alpha0=0
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
         
-        distance: float defining the distance from the end of the measurement quadrupole to the 
-                observation screen. If there are optical elements between the quad and screen, 
-                we must replace this argument with rmat_quad_to_screen (below).
-         
-        (NOT CURRENTLY IN USE -- ASSUMED TO BE DRIFT SPACE)
-        rmat_quad_to_screen: the (fixed) 2x2 R matrix describing the transport from the end of the 
+        rmat_quad_to_screen: tensor containing the (fixed) 2x2 R matrix describing the transport from the end of the 
                 measurement quad to the observation screen.
 
         beta0: the design beta twiss parameter at the screen
@@ -355,7 +350,6 @@ def compute_emit_bmag_thick_quad(k, y_batch, q_len, distance, beta0=1., alpha0=0
     """
     
     # construct the A matrix from eq. (3.2) & (3.3) of source paper
-    rmat_quad_to_screen = build_quad_rmat(k=torch.tensor([0.]), q_len=distance) # result shape 1 x 2 x 2
     quad_rmats = build_quad_rmat(k, q_len) # result shape (len(k) x 2 x 2)
     total_rmats = rmat_quad_to_screen.reshape(1,2,2) @ quad_rmats # result shape (len(k) x 2 x 2)
     
@@ -550,7 +544,7 @@ def get_valid_emit_bmag_samples_from_quad_scan(
     k,
     y,
     q_len,
-    distance,
+    rmat_quad_to_screen,
     beta0=1.,
     alpha0=0.,
     n_samples=10000,
@@ -577,10 +571,10 @@ def get_valid_emit_bmag_samples_from_quad_scan(
             with inputs given by k
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
-
-        distance: the longitudinal distance (drift length) in [m] from the measurement
-                    quadrupole to the observation screen
-
+                    
+        rmat_quad_to_screen: tensor containing the (fixed) 2x2 R matrix describing the transport from the end of the 
+                measurement quad to the observation screen.
+                
         beta0: the design beta twiss parameter at the screen
         
         alpha0: the design alpha twiss parameter at the screen
@@ -629,7 +623,7 @@ def get_valid_emit_bmag_samples_from_quad_scan(
     (emit, bmag, sig, is_valid) = compute_emit_bmag_thick_quad(k=k_virtual, 
                                                               y_batch=bss, 
                                                               q_len=q_len, 
-                                                              distance=distance, 
+                                                              rmat_quad_to_screen=rmat_quad_to_screen, 
                                                               beta0=beta0, 
                                                               alpha0=alpha0)
 

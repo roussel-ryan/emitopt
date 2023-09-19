@@ -15,10 +15,9 @@ from .sampling import (
     draw_product_kernel_post_paths,
 )
 
-from .utils import (
-    get_meas_scan_inputs_from_tuning_configs,
-    post_mean_emit_squared_thick_quad,
-    post_path_emit_squared_thick_quad,
+from .beam_dynamics import (
+    get_meas_scan_inputs,
+    post_path_emit_squared,
     post_path_misalignment,
     sum_samplewise_misalignment_flat_x,
     sum_samplewise_emittance_xy_flat_input,
@@ -146,7 +145,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
 #         ).double()
 #         x_tuning_init = xs_tuning_init.flatten()
         ##############
-        bss_model_x, bss_model_y = model.models
+        bss_model_x, bss_model_y = model.models # beam size squared models
         bss_x = bss_model_x.outcome_transform.untransform(bss_model_x.train_targets)[0]
         bss_y = bss_model_y.outcome_transform.untransform(bss_model_y.train_targets)[0]
         bss = torch.sqrt(bss_x * bss_y)

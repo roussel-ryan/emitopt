@@ -102,14 +102,14 @@ def post_path_misalignment(
     return misalignment, xs, ys
 
 
-def post_path_emit_squared_thick_quad(
+def post_path_emit_squared(
     post_paths,
-    scale_factor,
-    q_len,
-    distance,
     x_tuning,
-    meas_dim,
     x_meas,
+    meas_dim,
+    q_len,
+    rmat,
+    scale_factor,
     samplewise=False,
 ):
     """
@@ -118,7 +118,7 @@ def post_path_emit_squared_thick_quad(
     with respect to some tuning devices and a measurement quadrupole.
 
     arguments:
-        post_paths: a pathwise posterior sample from a SingleTaskGP model of the beam size
+        post_paths: a callable pathwise posterior sample from a SingleTaskGP model of the beam size.
         scale_factor: (float) factor by which to multiply model measurement quadrupole inputs to get
                         geometric focusing strengths in [m^-2]
         q_len: (float) the longitudinal "thickness", or length, of the measurement quadrupole in [m]
@@ -147,7 +147,7 @@ def post_path_emit_squared_thick_quad(
 
     # get the complete tensor of inputs for a set of virtual quad measurement scans to be
     # performed at the locations in tuning parameter space specified by x_tuning
-    xs = get_meas_scan_inputs_from_tuning_configs(meas_dim, x_tuning, x_meas)
+    xs = get_meas_scan_inputs(meas_dim, x_tuning, x_meas)
 
     k_meas = x_meas * scale_factor
 
@@ -159,8 +159,8 @@ def post_path_emit_squared_thick_quad(
         (
             sig, 
             is_valid
-        ) = compute_emit_bmag_thick_quad(
-            k_meas, ys, q_len, distance
+        ) = compute_emit_bmag(
+            k_meas, ys, q_len, rmat
         )[-2:]
 
         emits_squared = (sig[:,0,0]*sig[:,2,0] - sig[:,1,0]**2).reshape(-1,1)
@@ -175,8 +175,8 @@ def post_path_emit_squared_thick_quad(
         (
             sig, 
             is_valid
-        ) = compute_emit_bmag_thick_quad(
-            k_meas, ys, q_len, distance
+        ) = compute_emit_bmag(
+            k_meas, ys, q_len, rmat
         )[-2:]
 
         emits_squared = (sig[:,0,0]*sig[:,2,0] - sig[:,1,0]**2).reshape(-1,1)
@@ -196,22 +196,22 @@ def sum_samplewise_emittance_xy_flat_input(
     post_paths_xy, # list length 2 with the pathwise sample functions from each of the x and y beam size models (in that order)
     scale_factor, 
     q_len, 
-    distance, 
+    rmat, 
     x_tuning_flat, 
     meas_dim, 
     x_meas, 
-):    
+):
     x_tuning = x_tuning_flat.double().reshape(post_paths_xy[0].n_samples, -1)
     scale_factors = [scale_factor, -scale_factor]
-    emit_sq_x, emit_sq_y = [post_path_emit_squared_thick_quad(post_paths,
-                                                        scale_factor=sf,
-                                                        q_len=q_len,
-                                                        distance=distance,
-                                                        x_tuning=x_tuning,
-                                                        meas_dim=meas_dim,
-                                                        x_meas=x_meas,
-                                                        samplewise=True
-                                                      )[0] for sf, post_paths in zip(scale_factors, post_paths_xy)]
+    emit_sq_x, emit_sq_y = [post_path_emit_squared(post_paths,
+                                                    x_tuning=x_tuning,
+                                                    x_meas=x_meas,
+                                                    meas_dim=meas_dim,
+                                                    q_len=q_len,
+                                                    rmat=rmat,
+                                                    scale_factor=sf,
+                                                    samplewise=True
+                                                  )[0] for sf, post_paths in zip(scale_factors, post_paths_xy)]
     
     return torch.sum(emit_sq_x.abs().sqrt() * emit_sq_y.abs().sqrt())
 
@@ -252,7 +252,7 @@ def post_mean_emit_squared_thick_quad(
                     the corresponding entry of the emits_squared tensor is physically valid.
     """
 
-    xs = get_meas_scan_inputs_from_tuning_configs(meas_dim, x_tuning, x_meas)
+    xs = get_meas_scan_inputs(meas_dim, x_tuning, x_meas)
     ys = model.posterior(xs).mean
 
     ys_batch = ys.reshape(x_tuning.shape[0], -1)
@@ -264,14 +264,14 @@ def post_mean_emit_squared_thick_quad(
         bmag_min,
         sig,
         is_valid,
-    ) = compute_emit_bmag_thick_quad(k_meas, ys_batch, q_len, distance)
+    ) = compute_emit(k_meas, ys_batch, q_len, distance)
 
     emit_squared = (sig[:,0,0]*sig[:,2,0] - sig[:,1,0]**2).reshape(-1,1)
     
     return emit_squared, is_valid
 
 
-def get_meas_scan_inputs_from_tuning_configs(meas_dim, x_tuning, x_meas):
+def get_meas_scan_inputs(meas_dim, x_tuning, x_meas):
     """
     A function that generates the inputs for virtual emittance measurement scans at the tuning
     configurations specified by x_tuning.
@@ -317,139 +317,173 @@ def get_meas_scan_inputs_from_tuning_configs(meas_dim, x_tuning, x_meas):
     return xs
 
 
-def compute_emit_bmag_thick_quad(k, y_batch, q_len, rmat_quad_to_screen, beta0=1., alpha0=0.):
+def compute_emit_bmag(k, y, q_len, rmat_quad_to_screen, beta0=1., alpha0=0.):
     """
     A function that computes the emittance(s) corresponding to a set of quadrupole measurement scans
     using a thick quad model.
 
     Parameters:
-        k: 1d torch tensor of shape (n_steps_quad_scan,)
+        k: torch tensor of shape (n_steps_quad_scan,) or (batchshape x n_steps_quad_scan)
             representing the measurement quad geometric focusing strengths in [m^-2]
-            used in the emittance scan
+            used in the emittance scan(s)
 
-        y_batch: 2d torch tensor of shape (n_scans x n_steps_quad_scan),
+        y: torch tensor of shape (batchshape x n_steps_quad_scan),
+                representing the mean-square beamsize outputs in [m^2] of the emittance scan(s)
+                with inputs given by k
+
+        q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
+        
+        rmat_quad_to_screen: tensor shape (2x2) or (batchshape x 2 x 2)
+                containing the 2x2 R matrices describing the transport from the end of the 
+                measurement quad to the observation screen.
+
+        beta0: float or tensor shape (batchshape x 1) designating the design beta twiss parameter at the screen
+        
+        alpha0: float or tensor shape (batchshape x 1) designating the design alpha twiss parameter at the screen
+        
+    Returns:
+        emit: tensor shape (batchshape) containing the geometric emittance fit results for each scan
+        bmag_min: tensor shape (batchshape) containing the bmag corresponding to the optimal point for each scan
+        sig: shape tensor shape (batchshape x 3 x 1) containing column vectors of [sig11, sig12, sig22]
+        is_valid: tensor shape (batchshape) identifying physical validity of the emittance fit results
+        
+    SOURCE PAPER: http://www-library.desy.de/preparch/desy/thesis/desy-thesis-05-014.pdf
+    """
+    sig, total_rmats = beam_matrix_from_quad_scan(k, y, q_len, rmat_quad_to_screen)
+    
+    emit = torch.sqrt(sig[...,0,0]*sig[...,2,0] - sig[...,1,0]**2) # result shape (batchshape)
+    
+    # check sigma matrix and emit for physical validity
+    is_valid = torch.logical_and(sig[...,0,0] > 0, sig[...,2,0] > 0) # result batchshape
+    is_valid = torch.logical_and(is_valid, ~torch.isnan(emit)) # result batchshape
+    
+    bmag = compute_bmag(sig, emit, total_rmats, beta0, alpha0) # result batchshape
+    
+    return emit, bmag, sig, is_valid
+
+
+def beam_matrix_from_quad_scan(k, y, q_len, rmat_quad_to_screen):
+    """
+    A function that reconstructs the beam matrices corresponding to a set of quadrupole measurement scans
+    using a thick quad model.
+
+    Parameters:
+        k: torch tensor of shape (n_steps_quad_scan,) or (batchshape x n_steps_quad_scan),
+            representing the measurement quad geometric focusing strengths in [m^-2]
+            used in a batch of emittance scans
+
+        y: torch tensor of shape (batchshape x n_steps_quad_scan),
                 where each row represents the mean-square beamsize outputs in [m^2] of an emittance scan
                 with inputs given by k
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
         
-        rmat_quad_to_screen: tensor containing the (fixed) 2x2 R matrix describing the transport from the end of the 
+        rmat_quad_to_screen: tensor shape (2x2) or (batchshape x 2 x 2)
+                containing the 2x2 R matrices describing the transport from the end of the 
                 measurement quad to the observation screen.
-
-        beta0: the design beta twiss parameter at the screen
-        
-        alpha0: the design alpha twiss parameter at the screen
-        
-    Returns:
-        emit: shape (n_scans x 1) containing the geometric emittance fit results for each scan
-        bmag_min: (n_scans x 1) containing the bmag corresponding to the optimal point for each scan
-        sig: shape (n_scans x 3 x 1) containing column vectors of [sig11, sig12, sig22]
-        is_valid: 1d tensor identifying physical validity of the emittance fit results
-        
-    SOURCE PAPER: http://www-library.desy.de/preparch/desy/thesis/desy-thesis-05-014.pdf
     """
     
     # construct the A matrix from eq. (3.2) & (3.3) of source paper
-    quad_rmats = build_quad_rmat(k, q_len) # result shape (len(k) x 2 x 2)
-    total_rmats = rmat_quad_to_screen.reshape(1,2,2) @ quad_rmats # result shape (len(k) x 2 x 2)
+    quad_rmats = build_quad_rmat(k, q_len) # result shape (batchshape x nsteps x 2 x 2)
+    total_rmats = rmat_quad_to_screen.unsqueeze(-3).double() @ quad_rmats.double() 
+    # result shape (batchshape x nsteps x 2 x 2)
     
-    amat = torch.tensor([]) # prepare the A matrix
-    for rmat in total_rmats:
-        r11, r12 = rmat[0,0], rmat[0,1]
-        amat = torch.cat((amat, torch.tensor([[r11**2, 2.*r11*r12, r12**2]])), dim=0)
-    # amat result shape (len(k) x 3)
-    
-    # get sigma matrix elements just before measurement quad from pseudo-inverse
-    sig = amat.pinverse().unsqueeze(0) @ y_batch.unsqueeze(-1) # shapes (1 x 3 x len(k)) @ (n_scans x len(k) x 1)
-    # result shape (n_scans x 3 x 1) containing column vectors of [sig11, sig12, sig22]
-    
-    # compute emit
-    emit = torch.sqrt(sig[:,0,0]*sig[:,2,0] - sig[:,1,0]**2).reshape(-1,1) # result shape (n_scans x 1)
+    # prepare the A matrix
+    r11, r12 = total_rmats[...,0,0], total_rmats[...,0,1]
+    amat = torch.stack((r11**2, 2.*r11*r12, r12**2), dim=-1)
+    # amat result (batchshape x nsteps x 3)
 
-    # check sigma matrix and emit for physical validity
-    is_valid = torch.logical_and(sig[:,0,0] > 0, sig[:,2,0] > 0) # result 1d tensor
-    is_valid = torch.logical_and(is_valid, ~torch.isnan(emit.flatten())) # result 1d tensor
+    # get sigma matrix elements just before measurement quad from pseudo-inverse
+    sig = amat.pinverse() @ y.unsqueeze(-1).double()
+    # shapes (batchshape x 3 x nsteps) @ (batchshape x nsteps x 1)
+    # result shape (batchshape x 3 x 1) containing column vectors of [sig11, sig12, sig22]
     
-    # propagate beam parameters to screen
-    twiss_at_screen = propagate_sig(sig, emit, total_rmats)[1]
-    # result shape (n_scans x len(k) x 3 x 1)
-    
+    return sig, total_rmats
+
+
+def compute_bmag(sig, emit, total_rmats, beta0, alpha0):
+    """
+    parameters:
+        sig: shape batchshape x 3 x 1
+        emit: shape batchshape
+        total_rmats: shape batchshape x nsteps x 2 x 2
+    returns:
+        bmag_min: shape batchshape x nsteps x 3 x 1
+        twiss_final: shape batchshape x nsteps x 3 x 1
+    """
+    twiss_at_screen = propagate_beam_quad_scan(sig, emit, total_rmats)[1]
+    # result shape (batchshape x nsteps x 3 x 1)
+
     # get design gamma0 from design beta0, alpha0
     gamma0 = (1 + alpha0**2) / beta0
-    
+
     # compute bmag
-    bmag = 0.5 * (twiss_at_screen[:,:,0,0] * gamma0
-                - 2 * twiss_at_screen[:,:,1,0] * alpha0
-                + twiss_at_screen[:,:,2,0] * beta0
+    bmag = 0.5 * (twiss_at_screen[...,0,0] * gamma0
+                - 2 * twiss_at_screen[...,1,0] * alpha0
+                + twiss_at_screen[...,2,0] * beta0
                )
-    # result shape (n_scans, n_steps_quad_scan)
-    
+    # result shape (batchshape x nsteps)
+
     # select minimum bmag from quad scan
-    bmag_min, bmag_min_id = torch.min(bmag, dim=1, keepdim=True) # result shape (n_scans, 1) 
-    
-    return emit, bmag_min, sig, is_valid
+    bmag_min, bmag_min_id = torch.min(bmag, dim=-1) # result shape (batchshape)
+
+    return bmag_min
 
 
-def propagate_sig(sig_init, emit, rmat):
+def propagate_beam_quad_scan(sig_init, emit, rmat):
+    """
+    parameters:
+        sig_init: shape batchshape x 3 x 1
+        emit: shape batchshape
+        rmat: shape batchshape x nsteps x 2 x 2
+    returns:
+        sig_final: shape batchshape x nsteps x 3 x 1
+        twiss_final: shape batchshape x nsteps x 3 x 1
+    """
     temp = torch.tensor([[[1., 0., 0.],
                            [0., -1., 0.],
                            [0., 0., 1.]]]).double()
-    twiss_init = (temp @ sig_init)/emit.unsqueeze(-1) # result shape (len(sig_init) x 3 x 1)
+    twiss_init = (temp @ sig_init) @ (1/emit.reshape(*emit.shape,1,1)) # result shape (batchshape x 3 x 1)
     
-    twiss_transport = twiss_transport_mat_from_rmat(rmat) # result shape (len(rmat) x 3 x 3)
+    twiss_transport = twiss_transport_mat_from_rmat(rmat) # result shape (batchshape x 3 x 3)
 
-    twiss_final = twiss_transport.unsqueeze(0) @ twiss_init.unsqueeze(1)
-    # result shape (len(sig_init) x len(rmat) x 3 x 1)
+    twiss_final = twiss_transport @ twiss_init.unsqueeze(-3)
+    # result shape (batchshape x nsteps x 3 x 1)
 
-    sig_final = (temp.unsqueeze(0) @ twiss_final) * emit.reshape(-1,1,1,1) 
-    # result shape (len(sig_init) x len(rmat) x 3 x 1)
+    sig_final = (temp @ twiss_final) @ emit.reshape(*emit.shape,1,1,1) 
+    # result shape (batchshape x nsteps x 3 x 1)
     
     return sig_final, twiss_final
 
 
 def twiss_transport_mat_from_rmat(rmat):
-    rmat = rmat.reshape(-1,2,2)
-    twiss_transport = torch.tensor([])
-    for mat in rmat:
-        c, s, cp, sp = mat[0,0], mat[0,1], mat[1,0], mat[1,1]
-
-        twiss_transport = torch.cat((twiss_transport, torch.tensor([[[c**2, -2*c*s, s**2],
-                                                                   [-c*cp, c*sp + cp*s, -s*sp],
-                                                                   [cp**2, -2*cp*sp, sp**2]]]
-                                                                ).double()
-                                    ))
-    return twiss_transport
+    c, s, cp, sp = rmat[...,0,0], rmat[...,0,1], rmat[...,1,0], rmat[...,1,1]
+    result = torch.stack((
+        torch.stack((c**2, -2*c*s, s**2), dim=-1), 
+        torch.stack((-c*cp, c*sp + cp*s, -s*sp), dim=-1),
+        torch.stack((cp**2, -2*cp*sp, sp**2), dim=-1)), 
+        dim=-2
+    )
+    return result
 
 
 def build_quad_rmat(k, q_len):
-    # construct/collect quad R matrices
-    rmat = torch.tensor([])
-    for j in k:
-        if j > 0:
-            c, s, cp, sp = (
-                            torch.cos(j.sqrt()*q_len), 
-                            1./j.sqrt() * torch.sin(j.sqrt()*q_len),
-                            -j.sqrt() * torch.sin(j.sqrt()*q_len), 
-                            torch.cos(j.sqrt()*q_len)
-                           )
-#             c, s, cp, sp = (1., 0., -j*q_len, 1.)
-        elif j < 0:
-            c, s, cp, sp = (
-                            torch.cosh(j.abs().sqrt()*q_len), 
-                            1./j.abs().sqrt() * torch.sinh(j.abs().sqrt()*q_len),
-                            j.abs().sqrt() * torch.sinh(j.abs().sqrt()*q_len), 
-                            torch.cosh(j.abs().sqrt()*q_len)
-                           )
-#             c, s, cp, sp = (1., 0., j*q_len, 1.)
-        elif j == 0:
-            c, s, cp, sp = (1., q_len, 0., 1.)
+    eps = 2.220446049250313e-16  # machine epsilon to double precision
+    sqrt_k = k.abs().sqrt() + eps
+    c, s, cp, sp = (
+                    torch.cos(sqrt_k*q_len)*(k >= 0) + torch.cosh(sqrt_k*q_len)*(k < 0), 
+                    1./sqrt_k * torch.sin(sqrt_k*q_len)*(k >= 0) + 1./sqrt_k * torch.sinh(sqrt_k*q_len)*(k < 0),
+                    -sqrt_k * torch.sin(sqrt_k*q_len)*(k >= 0) + sqrt_k * torch.sinh(sqrt_k*q_len)*(k < 0), 
+                    torch.cos(sqrt_k*q_len)*(k >= 0) + torch.cosh(sqrt_k*q_len)*(k < 0)
+                   )
 
-        rmat = torch.cat((rmat, torch.tensor([[[c, s],
-                                              [cp, sp]]]
-                                            ).double()
-                         ))
-        
-    return rmat
+    result = torch.stack((
+        torch.stack((c, s), dim=-1), 
+        torch.stack((cp, sp), dim=-1),), 
+        dim=-2
+    )
+    
+    return result
 
 
 # +
@@ -540,7 +574,7 @@ def fit_gp_quad_scan(
 
 # -
 
-def get_valid_emit_bmag_samples_from_quad_scan(
+def compute_emit_bayesian(
     k,
     y,
     q_len,
@@ -620,7 +654,7 @@ def get_valid_emit_bmag_samples_from_quad_scan(
         tkwargs=tkwargs
     )
     
-    (emit, bmag, sig, is_valid) = compute_emit_bmag_thick_quad(k=k_virtual, 
+    (emit, bmag, sig, is_valid) = compute_emit(k=k_virtual, 
                                                               y_batch=bss, 
                                                               q_len=q_len, 
                                                               rmat_quad_to_screen=rmat_quad_to_screen, 
@@ -639,7 +673,7 @@ def get_valid_emit_bmag_samples_from_quad_scan(
         plot_valid_thick_quad_fits(k=k, 
                                    y=y, 
                                    q_len=q_len, 
-                                   distance=distance,
+                                   rmat_quad_to_screen=rmat_quad_to_screen,
                                    emit=emit_valid, 
                                    bmag=bmag_valid,
                                    sig=sig_valid, 
@@ -649,7 +683,7 @@ def get_valid_emit_bmag_samples_from_quad_scan(
     return emit_valid, bmag_valid, sig_valid, sample_validity_rate
 
 
-def plot_valid_thick_quad_fits(k, y, q_len, distance, emit, bmag, sig, ci=0.95, tkwargs=None, k_virtual=None, bss_virtual=None):
+def plot_valid_thick_quad_fits(k, y, q_len, rmat_quad_to_screen, emit, bmag, sig, ci=0.95, tkwargs=None, k_virtual=None, bss_virtual=None):
     """
     A function to plot the physically valid fit results
     produced by get_valid_emit_bmag_samples_from_quad_scan().
@@ -682,14 +716,12 @@ def plot_valid_thick_quad_fits(k, y, q_len, distance, emit, bmag, sig, ci=0.95, 
 
         tkwargs: dict containing the tensor device and dtype
     """
-    from matplotlib import pyplot as plt
 
     if tkwargs is None:
         tkwargs = {"dtype": torch.double, "device": "cpu"}
 
     k_fit = torch.linspace(k.min(), k.max(), 10, **tkwargs)
     quad_rmats = build_quad_rmat(k_fit, q_len) # result shape (len(k_fit) x 2 x 2)
-    rmat_quad_to_screen = build_quad_rmat(k=torch.tensor([0.]), q_len=distance)
     total_rmats = rmat_quad_to_screen.reshape(1,2,2) @ quad_rmats # result shape (len(k_fit) x 2 x 2)
     sig_final = propagate_sig(sig, emit, total_rmats)[0] # result shape len(sig) x len(k_fit) x 3 x 1
     bss_fit = sig_final[:,:,0,0]
@@ -740,11 +772,9 @@ def plot_valid_thick_quad_fits(k, y, q_len, distance, emit, bmag, sig, ci=0.95, 
     ax.set_ylabel('Probability Density')
     
     plt.tight_layout()
-    plt.show()
-    plt.close()
 
 
-def get_valid_geo_mean_emittance_samples_thick_quad(
+def get_valid_geo_mean_emittance_samples(
     model,
     scale_factor,
     q_len,
@@ -795,7 +825,7 @@ def get_valid_geo_mean_emittance_samples_thick_quad(
                                 were physically valid/retained
     """
     x_meas = torch.linspace(*domain[meas_dim], n_steps_quad_scan)
-    xs_1d_scan = get_meas_scan_inputs_from_tuning_configs(meas_dim, x_tuning, x_meas)
+    xs_1d_scan = get_meas_scan_inputs(meas_dim, x_tuning, x_meas)
     
     bss_model_x, bss_model_y = model.models
     
@@ -803,7 +833,7 @@ def get_valid_geo_mean_emittance_samples_thick_quad(
     p = bss_model_x.posterior(xs_1d_scan)
     bss = p.sample(torch.Size([n_samples])).reshape(-1, n_steps_quad_scan)
     ks = x_meas * scale_factor
-    (emit_x, bmag_min_x, sig_x, is_valid_x) = compute_emit_bmag_thick_quad(
+    (emit_x, bmag_min_x, sig_x, is_valid_x) = compute_emit(
         ks, bss, q_len, distance
     )
     
@@ -811,7 +841,7 @@ def get_valid_geo_mean_emittance_samples_thick_quad(
     p = bss_model_y.posterior(xs_1d_scan)
     bss = p.sample(torch.Size([n_samples])).reshape(-1, n_steps_quad_scan)
     ks = x_meas * (-1.*scale_factor)
-    (emit_y, bmag_min_y, sig_y, is_valid_y) = compute_emit_bmag_thick_quad(
+    (emit_y, bmag_min_y, sig_y, is_valid_y) = compute_emit(
         ks, bss, q_len, distance
     )
     
@@ -836,7 +866,7 @@ def get_quad_strength_conversion_factor(E=0.135, q_len=0.108):
     in [kG] to the geometric focusing strengths in [m^-2].
 
     Parameters:
-        E: Beam energy in [MeV]
+        E: Beam energy in [GeV]
         q_len: quadrupole length or "thickness" (longitudinal) in [m]
 
     Returns:
@@ -861,156 +891,3 @@ def normalize_emittance(emit, energy):
     beta = 1.0 - 1.0 / (2 * gamma**2)
     emit_n = gamma * beta * emit
     return emit_n
-
-
-def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, show_valid_only=True):
-    ndim = results[1]["x_stars_all"].shape[1]
-    niter = max(results.keys())
-    nsamples = results[1]["x_stars_all"].shape[0]
-
-    if tuning_parameter_names is None:
-        tuning_parameter_names = ['tp_' + str(i) for i in range(ndim)]
-
-    from matplotlib import pyplot as plt
-    
-    fig, axs = plt.subplots(ndim, 1)
-
-    for i in range(ndim):
-
-        if ndim > 1:
-            ax = axs[i]
-        else:
-            ax = axs
-
-        ax.set_ylabel(tuning_parameter_names[i])
-        ax.set_xlabel("iteration")
-        
-        if i == 0:
-            ax.set_title("Sample Optima Distribution: Tuning Parameters")
-            
-        for key in results.keys():
-            if show_valid_only:
-                is_valid = results[key]["is_valid"]
-                cut_ids = torch.tensor(range(nsamples))[is_valid]
-            else:
-                cut_ids = torch.tensor(range(nsamples))
-            ax.scatter(torch.tensor([key]).repeat(len(cut_ids)), 
-                       torch.index_select(results[key]["x_stars_all"], dim=0, index=cut_ids)[:,i],
-                       c='C0')
-    plt.tight_layout()
-
-
-def plot_sample_optima_convergence_emits(results):
-    niter = max(results.keys())
-    nsamples = results[1]["emit_stars_all"].shape[0]
-    
-    from matplotlib import pyplot as plt
-
-    fig, ax = plt.subplots(1)
-
-    ax.set_ylabel("$\epsilon$")
-    ax.set_xlabel("iteration")
-    ax.set_title("Sample Optima Distribution: Emittance")
-    for key in results.keys():
-        is_valid = results[key]["is_valid"]
-        valid_ids = torch.tensor(range(nsamples))[is_valid]
-        ax.scatter(torch.tensor([key]).repeat(torch.sum(is_valid)), 
-                   torch.index_select(results[key]["emit_stars_all"], dim=0, index=valid_ids)[:,0].detach(), 
-                   c='C0')
-    plt.tight_layout()
-
-
-def plot_valid_emit_prediction_at_x_tuning(model, 
-                                           x_tuning, 
-                                           scale_factor, 
-                                           q_len, 
-                                           distance, 
-                                           bounds, 
-                                           meas_dim, 
-                                           n_samples, 
-                                           n_steps_quad_scan):
-    (
-    emits_at_target_valid,
-    sample_validity_rate,
-    ) = get_valid_emittance_samples(
-            model,
-            scale_factor,
-            q_len,
-            distance,
-            x_tuning,
-            bounds.T,
-            meas_dim,
-            n_samples=n_samples,
-            n_steps_quad_scan=n_steps_quad_scan,
-        )
-    
-    from matplotlib import pyplot as plt
-
-    plt.hist(emits_at_target_valid.flatten().cpu(), density=True)
-    plt.xlabel('Predicted Optimal Emittance')
-    plt.ylabel('Probability Density')
-    plt.tight_layout()
-    plt.show()
-    print('sample validity rate:', sample_validity_rate)
-
-
-def plot_model_cross_section(model, vocs, scan_dict, nx=50, ny=50):
-    scan_var_model_ids = {}
-    scan_inputs_template = []
-    for i, var_name in enumerate(vocs.variable_names):
-        if isinstance(scan_dict[var_name], list):
-            if len(scan_dict[var_name])!=2:
-                raise ValueError("Entries must be either float or 2-element list of floats.")
-            scan_var_model_ids[var_name] = i
-            scan_inputs_template += [scan_dict[var_name][0]]
-        else:
-            if not isinstance(scan_dict[var_name],float):
-                raise ValueError("Entries must be either float or 2-element list of floats.")
-            scan_inputs_template += [scan_dict[var_name]]
-    
-    if len(scan_var_model_ids)!=2:
-        raise ValueError("Exactly 2 keys must have entries that are 2-element lists.")
-    
-    scan_inputs = torch.tensor(scan_inputs_template).repeat(nx*ny, 1)
-
-    scan_varx = list(scan_var_model_ids.keys())[0]
-    scan_vary = list(scan_var_model_ids.keys())[1]
-
-    lsx = torch.linspace(*scan_dict[scan_varx], nx)
-    lsy = torch.linspace(*scan_dict[scan_vary], ny)
-    meshx, meshy = torch.meshgrid((lsx, lsy), indexing='xy')
-    mesh_points_serial = torch.cat((meshx.reshape(-1,1), meshy.reshape(-1,1)), dim=1)
-    
-    model_idx = scan_var_model_ids[scan_varx]
-    scan_inputs[:,model_idx] = mesh_points_serial[:,0]
-    
-    model_idy = scan_var_model_ids[scan_vary]
-    scan_inputs[:,model_idy] = mesh_points_serial[:,1]
-
-    with torch.no_grad():
-        posterior = model.posterior(scan_inputs)
-        mean = posterior.mean
-        var = posterior.variance
-
-    mean = mean.reshape(ny, nx)
-    var = var.reshape(ny, nx)
-    
-    from matplotlib import pyplot as plt
-
-    fig, axs = plt.subplots(2)
-
-    ax = axs[0]
-    m = ax.pcolormesh(meshx, meshy, mean)
-    ax.set_xlabel(scan_varx)
-    ax.set_ylabel(scan_vary)
-    ax.set_title('Posterior Mean')
-    cbar_m = fig.colorbar(m, ax=ax)
-    
-    ax = axs[1]
-    v = ax.pcolormesh(meshx, meshy, var)
-    ax.set_xlabel(scan_varx)
-    ax.set_ylabel(scan_vary)
-    ax.set_title('Posterior Variance')
-    cbar_v = fig.colorbar(v, ax=ax)
-
-    plt.tight_layout()

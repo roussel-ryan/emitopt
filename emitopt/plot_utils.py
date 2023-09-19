@@ -1,6 +1,103 @@
+# +
 import torch
 from matplotlib import pyplot as plt
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+import matplotlib.patches as mpatches
+from emitopt.beam_dynamics import post_path_emit_squared_thick_quad
 
+# from emitopt.beam_dynamics import build_quad_rmat, propagate_sig
+
+# +
+# def plot_valid_thick_quad_fits(k, y, q_len, rmat_quad_to_screen, emit, bmag, sig, ci=0.95, tkwargs=None, k_virtual=None, bss_virtual=None):
+#     """
+#     A function to plot the physically valid fit results
+#     produced by get_valid_emit_bmag_samples_from_quad_scan().
+
+#     Parameters:
+
+#         k: 1d numpy array of shape (n_steps_quad_scan,)
+#         representing the measurement quad geometric focusing strengths in [m^-2]
+#         used in the emittance scan
+
+#         y: 1d numpy array of shape (n_steps_quad_scan, )
+#             representing the root-mean-square beam size measurements in [m] of an emittance scan
+#             with inputs given by k
+
+#         sig: tensor, shape (n_scans x 3 x 1), containing the computed sig11, sig12, sig22
+#                 corresponding to each measurement scan
+                
+#         emit: shape (n_scans x 1) containing the geometric emittance fit results for each scan
+
+#         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
+
+#         distance: the longitudinal distance (drift length) in [m] from the measurement
+#                     quadrupole to the observation screen
+        
+#         (NOT IN USE)
+#         rmat_quad_to_screen: the (fixed) 2x2 R matrix describing the transport from the end of the 
+#                 measurement quad to the observation screen.
+                
+#         ci: "Confidence interval" for plotting upper/lower quantiles.
+
+#         tkwargs: dict containing the tensor device and dtype
+#     """
+
+#     if tkwargs is None:
+#         tkwargs = {"dtype": torch.double, "device": "cpu"}
+
+#     k_fit = torch.linspace(k.min(), k.max(), 10, **tkwargs)
+#     quad_rmats = build_quad_rmat(k_fit, q_len) # result shape (len(k_fit) x 2 x 2)
+#     total_rmats = rmat_quad_to_screen.reshape(1,2,2) @ quad_rmats # result shape (len(k_fit) x 2 x 2)
+#     sig_final = propagate_sig(sig, emit, total_rmats)[0] # result shape len(sig) x len(k_fit) x 3 x 1
+#     bss_fit = sig_final[:,:,0,0]
+
+#     upper_quant = torch.quantile(bss_fit.sqrt(), q=0.5 + ci / 2.0, dim=0)
+#     lower_quant = torch.quantile(bss_fit.sqrt(), q=0.5 - ci / 2.0, dim=0)
+    
+#     fig, axs = plt.subplots(3)
+#     fig.set_size_inches(5,9)
+    
+#     ax=axs[0]
+#     fit = ax.fill_between(
+#         k_fit.detach().numpy(),
+#         lower_quant*1.e6,
+#         upper_quant*1.e6,
+#         alpha=0.3,
+#         label='"Bayesian" Thick-Quad Fits',
+#         zorder=1,
+#     )
+    
+#     bss_upper = torch.quantile(bss_virtual, q=0.5 + ci / 2.0, dim=0).sqrt()
+#     bss_lower = torch.quantile(bss_virtual, q=0.5 - ci / 2.0, dim=0).sqrt()
+#     virtual_meas = ax.scatter(k_virtual.repeat(bss_virtual.shape[0],1).detach(),
+#                                         bss_virtual.sqrt()*1.e6,
+#                                         alpha=0.3,
+#                                         color='r',
+#                                         label='Virtual Measurements',
+#                                         zorder=0) 
+    
+#     obs = ax.scatter(
+#         k, y*1.e6, marker="x", s=120, c="orange", label="Measurements", zorder=2
+#     )
+#     ax.set_title("Beam Size at Screen")
+#     ax.set_xlabel(r"Measurement Quad Geometric Focusing Strength ($[k]=m^{-2}$)")
+#     ax.set_ylabel(r"r.m.s. Beam Size")# ($[\sigma]=\mu m$)")
+#     ax.legend(handles=[obs, fit, virtual_meas])
+    
+#     ax=axs[1]
+#     ax.hist(emit.flatten(), density=True)
+#     ax.set_title('Geometric Emittance Distribution')
+#     ax.set_xlabel(r'Geometric Emittance')# ($[\epsilon]=m*rad$)')
+#     ax.set_ylabel('Probability Density')
+    
+#     ax=axs[2]
+#     ax.hist(bmag.flatten(), range=(1,5), bins=20, density=True)
+#     ax.set_title(r'$\beta_{mag}$ Distribution')
+#     ax.set_xlabel(r'$\beta_{mag}$ at Screen')
+#     ax.set_ylabel('Probability Density')
+    
+#     plt.tight_layout()
+# -
 
 def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, show_valid_only=True):
     ndim = results[1]["x_stars_all"].shape[1]
@@ -9,8 +106,6 @@ def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, 
 
     if tuning_parameter_names is None:
         tuning_parameter_names = ['tp_' + str(i) for i in range(ndim)]
-
-    from matplotlib import pyplot as plt
     
     fig, axs = plt.subplots(ndim, 1)
 
@@ -43,8 +138,6 @@ def plot_sample_optima_convergence_emits(results):
     niter = max(results.keys())
     nsamples = results[1]["emit_stars_all"].shape[0]
     
-    from matplotlib import pyplot as plt
-
     fig, ax = plt.subplots(1)
 
     ax.set_ylabel("$\epsilon$")
@@ -83,8 +176,6 @@ def plot_valid_emit_prediction_at_x_tuning(model,
             n_steps_quad_scan=n_steps_quad_scan,
         )
     
-    from matplotlib import pyplot as plt
-
     plt.hist(emits_at_target_valid.flatten().cpu(), density=True)
     plt.xlabel('Predicted Optimal Emittance')
     plt.ylabel('Probability Density')
@@ -134,8 +225,6 @@ def plot_model_cross_section(model, vocs, scan_dict, nx=50, ny=50):
     mean = mean.reshape(ny, nx)
     var = var.reshape(ny, nx)
     
-    from matplotlib import pyplot as plt
-
     fig, axs = plt.subplots(2)
 
     ax = axs[0]
@@ -260,9 +349,6 @@ def plot_pathwise_surface_samples_2d(optimizer): # paper figure
             x_stars_all = torch.cat((x_stars_all, x_stars), dim=0)
             emit_stars_all = torch.cat((emit_stars_all, emit_stars), dim=0)
 
-        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-        import matplotlib.patches as mpatches
-
         ax = axs[1]
 
         # plot median emittance curve
@@ -349,8 +435,6 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
     X_tuned = optimizer.generator.algorithm_results['x_stars'][sid:sid+1, :]
     print('X_tuned =', X_tuned)
     
-    from emitopt.utils import post_path_emit_squared_thick_quad
-
     n_tuning_dims = X_tuned.shape[1]
     fig, axs = plt.subplots(1, n_tuning_dims)
     if n_tuning_dims == 1: axs = [axs]
@@ -360,11 +444,11 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
     meas_dim = optimizer.generator.algorithm.meas_dim
     tuning_dims = list(range(n_tuning_dims + 1))
     tuning_dims.remove(meas_dim)
-    for scan_dim in tuning_dims:
+    for i, scan_dim in enumerate(tuning_dims):
                     
         X_tuning_scan = X_tuned.repeat(100,1)
         ls = torch.linspace(*optimizer.vocs.bounds.T[scan_dim],100)
-        X_tuning_scan[:,scan_dim] = ls
+        X_tuning_scan[:,i] = ls
         X_meas = torch.linspace(*optimizer.vocs.bounds.T[meas_dim],11)
 
         emit_sq_xy = []
@@ -377,18 +461,18 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
             emit_sq_xy += [emit_sq]
         geo_mean_emit = torch.sqrt(emit_sq_xy[0].abs().sqrt() * emit_sq_xy[1].abs().sqrt())
 
-        ax = axs[scan_dim]
+        ax = axs[i]
 
         if ground_truth_emittance_fn is not None:
             gt_emits, gt_emit_xy = ground_truth_emittance_fn(x_tuning=X_tuning_scan)
             ax.plot(ls, gt_emits, c='k', label='ground truth')
         ax.plot(ls.cpu(), geo_mean_emit[sid].detach().cpu()*1.e-6, label='Sample ' + str(sid))
-        ax.axvline(X_tuned[0,scan_dim].cpu(), c='r', label='Sample optimization result')
+        ax.axvline(X_tuned[0,i].cpu(), c='r', label='Sample optimization result')
         ax.axhline(0, c='k', ls='--', label='physical cutoff')
 
-        ax.set_xlabel('tuning param ' + str(scan_dim))
+        ax.set_xlabel('tuning param ' + str(i))
 
-        if scan_dim == 0:
+        if i == 0:
             ax.set_ylabel('$\sqrt{\epsilon_x\epsilon_y}$')
             ax.legend()
 
@@ -396,7 +480,7 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
     plt.show()
 
 
-from emitopt.utils import post_mean_emit_squared_thick_quad
+from emitopt.beam_dynamics import post_mean_emit_squared_thick_quad
 def plot_posterior_mean_modeled_emittance(optimizer, x_tuning, ground_truth_emittance_fn=None):
     
     
@@ -415,10 +499,10 @@ def plot_posterior_mean_modeled_emittance(optimizer, x_tuning, ground_truth_emit
     meas_dim = optimizer.generator.algorithm.meas_dim
     tuning_dims = list(range(n_tuning_dims + 1))
     tuning_dims.remove(meas_dim)
-    for scan_dim in tuning_dims:
+    for i, scan_dim in enumerate(tuning_dims):
         X_tuning_scan = x_tuning.repeat(100,1)
         ls = torch.linspace(*optimizer.vocs.bounds.T[scan_dim],100)
-        X_tuning_scan[:,scan_dim] = ls
+        X_tuning_scan[:,i] = ls
         X_meas = torch.linspace(*optimizer.vocs.bounds.T[meas_dim],11)
 
         
@@ -436,7 +520,7 @@ def plot_posterior_mean_modeled_emittance(optimizer, x_tuning, ground_truth_emit
             emit_sq_xy += [emit_sq]
             
         geo_mean_emit = torch.sqrt(emit_sq_xy[0].abs().sqrt() * emit_sq_xy[1].abs().sqrt())
-        ax = axs[scan_dim]
+        ax = axs[i]
 
         if ground_truth_emittance_fn is not None:
             gt_emits, gt_emit_xy = ground_truth_emittance_fn(x_tuning=X_tuning_scan)
@@ -445,9 +529,9 @@ def plot_posterior_mean_modeled_emittance(optimizer, x_tuning, ground_truth_emit
         ax.plot(ls.cpu(), geo_mean_emit.detach().cpu()*1.e-6, label='GP mean')
         ax.axhline(0, c='k', ls='--', label='physical cutoff')
 
-        ax.set_xlabel('tuning param ' + str(scan_dim))
+        ax.set_xlabel('tuning param ' + str(i))
 
-        if scan_dim == 0:
+        if i == 0:
             ax.set_ylabel('$\sqrt{\epsilon_x\epsilon_y}$')
             ax.legend()
 
@@ -507,7 +591,7 @@ def plot_acq_func_opt_results(optimizer):
     plt.show()
 
 # +
-from emitopt.utils import get_meas_scan_inputs_from_tuning_configs
+from emitopt.beam_dynamics import get_meas_scan_inputs_from_tuning_configs
 
 def plot_beam_size_squared_at_x_tuning(optimizer, x_tuning):
     meas_dim = optimizer.generator.algorithm.meas_dim

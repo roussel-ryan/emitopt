@@ -1,4 +1,5 @@
 import torch
+from matplotlib import pyplot as plt
 
 
 def sum_samplewise_misalignment_flat_x(
@@ -317,7 +318,7 @@ def get_meas_scan_inputs(meas_dim, x_tuning, x_meas):
     return xs
 
 
-def compute_emit_bmag(k, y, q_len, rmat_quad_to_screen, beta0=1., alpha0=0.):
+def compute_emit_bmag(k, beamsize_squared, q_len, rmat, beta0=1., alpha0=0., get_bmag=True):
     """
     A function that computes the emittance(s) corresponding to a set of quadrupole measurement scans
     using a thick quad model.
@@ -327,13 +328,13 @@ def compute_emit_bmag(k, y, q_len, rmat_quad_to_screen, beta0=1., alpha0=0.):
             representing the measurement quad geometric focusing strengths in [m^-2]
             used in the emittance scan(s)
 
-        y: torch tensor of shape (batchshape x n_steps_quad_scan),
+        msbs: torch tensor of shape (batchshape x n_steps_quad_scan),
                 representing the mean-square beamsize outputs in [m^2] of the emittance scan(s)
                 with inputs given by k
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
         
-        rmat_quad_to_screen: tensor shape (2x2) or (batchshape x 2 x 2)
+        rmat: tensor shape (2x2) or (batchshape x 2 x 2)
                 containing the 2x2 R matrices describing the transport from the end of the 
                 measurement quad to the observation screen.
 
@@ -341,6 +342,8 @@ def compute_emit_bmag(k, y, q_len, rmat_quad_to_screen, beta0=1., alpha0=0.):
         
         alpha0: float or tensor shape (batchshape x 1) designating the design alpha twiss parameter at the screen
         
+        get_bmag: boolean, whether or not to compute the bmag along with the emittance
+                    (Set to False for faster computation of only the emittance)
     Returns:
         emit: tensor shape (batchshape) containing the geometric emittance fit results for each scan
         bmag_min: tensor shape (batchshape) containing the bmag corresponding to the optimal point for each scan
@@ -349,7 +352,7 @@ def compute_emit_bmag(k, y, q_len, rmat_quad_to_screen, beta0=1., alpha0=0.):
         
     SOURCE PAPER: http://www-library.desy.de/preparch/desy/thesis/desy-thesis-05-014.pdf
     """
-    sig, total_rmats = beam_matrix_from_quad_scan(k, y, q_len, rmat_quad_to_screen)
+    sig, total_rmats = beam_matrix_from_quad_scan(k, beamsize_squared, q_len, rmat)
     
     emit = torch.sqrt(sig[...,0,0]*sig[...,2,0] - sig[...,1,0]**2) # result shape (batchshape)
     
@@ -357,12 +360,15 @@ def compute_emit_bmag(k, y, q_len, rmat_quad_to_screen, beta0=1., alpha0=0.):
     is_valid = torch.logical_and(sig[...,0,0] > 0, sig[...,2,0] > 0) # result batchshape
     is_valid = torch.logical_and(is_valid, ~torch.isnan(emit)) # result batchshape
     
-    bmag = compute_bmag(sig, emit, total_rmats, beta0, alpha0) # result batchshape
-    
+    if get_bmag:
+        bmag = compute_bmag(sig, emit, total_rmats, beta0, alpha0) # result batchshape
+    else:
+        bmag = None
+
     return emit, bmag, sig, is_valid
 
 
-def beam_matrix_from_quad_scan(k, y, q_len, rmat_quad_to_screen):
+def beam_matrix_from_quad_scan(k, beamsize_squared, q_len, rmat):
     """
     A function that reconstructs the beam matrices corresponding to a set of quadrupole measurement scans
     using a thick quad model.
@@ -372,20 +378,20 @@ def beam_matrix_from_quad_scan(k, y, q_len, rmat_quad_to_screen):
             representing the measurement quad geometric focusing strengths in [m^-2]
             used in a batch of emittance scans
 
-        y: torch tensor of shape (batchshape x n_steps_quad_scan),
+        msbs: torch tensor of shape (batchshape x n_steps_quad_scan),
                 where each row represents the mean-square beamsize outputs in [m^2] of an emittance scan
                 with inputs given by k
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
         
-        rmat_quad_to_screen: tensor shape (2x2) or (batchshape x 2 x 2)
+        rmat: tensor shape (2x2) or (batchshape x 2 x 2)
                 containing the 2x2 R matrices describing the transport from the end of the 
                 measurement quad to the observation screen.
     """
     
     # construct the A matrix from eq. (3.2) & (3.3) of source paper
     quad_rmats = build_quad_rmat(k, q_len) # result shape (batchshape x nsteps x 2 x 2)
-    total_rmats = rmat_quad_to_screen.unsqueeze(-3).double() @ quad_rmats.double() 
+    total_rmats = rmat.unsqueeze(-3).double() @ quad_rmats.double() 
     # result shape (batchshape x nsteps x 2 x 2)
     
     # prepare the A matrix
@@ -394,7 +400,7 @@ def beam_matrix_from_quad_scan(k, y, q_len, rmat_quad_to_screen):
     # amat result (batchshape x nsteps x 3)
 
     # get sigma matrix elements just before measurement quad from pseudo-inverse
-    sig = amat.pinverse() @ y.unsqueeze(-1).double()
+    sig = amat.pinverse() @ beamsize_squared.unsqueeze(-1).double()
     # shapes (batchshape x 3 x nsteps) @ (batchshape x nsteps x 1)
     # result shape (batchshape x 3 x 1) containing column vectors of [sig11, sig12, sig22]
     
@@ -404,12 +410,20 @@ def beam_matrix_from_quad_scan(k, y, q_len, rmat_quad_to_screen):
 def compute_bmag(sig, emit, total_rmats, beta0, alpha0):
     """
     parameters:
-        sig: shape batchshape x 3 x 1
-        emit: shape batchshape
-        total_rmats: shape batchshape x nsteps x 2 x 2
+        sig: tensor shape batchshape x 3 x 1 giving the initial beam matrix before the measurement quad
+        
+        emit: tensor shape batchshape giving the emittance for each initial beam matrix
+        
+        total_rmats: tensor shape batchshape x nsteps x 2 x 2 giving the rmats that describe transport
+                    through the meas quad and to the screen for each step in the measurement scan(s)
+        
+        beta0: float or tensor shape (batchshape x 1) designating the design beta (twiss) parameter
+                at the screen
+        
+        alpha0: float or tensor shape (batchshape x 1) designating the design alpha (twiss) parameter
+                at the screen
     returns:
-        bmag_min: shape batchshape x nsteps x 3 x 1
-        twiss_final: shape batchshape x nsteps x 3 x 1
+        bmag_min: tensor shape batchshape containing the minimum (best) bmag from each measurement scan
     """
     twiss_at_screen = propagate_beam_quad_scan(sig, emit, total_rmats)[1]
     # result shape (batchshape x nsteps x 3 x 1)
@@ -535,8 +549,8 @@ def fit_gp_quad_scan(
         k_virtual: a 1d tensor representing the inputs for the virtual measurement scans.
                     All virtual scans are evaluated at the same set of input locations.
 
-        bss: a tensor of shape (n_samples x n_steps_quad_scan) where each row repesents 
-        the beam size squared results of a virtual quad scan evaluated at the points k_virtual.
+        msbs: a tensor of shape (n_samples x n_steps_quad_scan) where each row repesents 
+        the mean-square beamsize results of a virtual quad scan evaluated at the points k_virtual.
     """
     
     if tkwargs is None:
@@ -567,18 +581,18 @@ def fit_gp_quad_scan(
     k_virtual = torch.linspace(k.min(), k.max(), n_steps_quad_scan, **tkwargs)
 
     p = model.posterior(k_virtual.reshape(-1, 1))
-    bss = p.sample(torch.Size([n_samples])).reshape(-1, n_steps_quad_scan)
+    bss_virtual = p.sample(torch.Size([n_samples])).reshape(-1, n_steps_quad_scan)
     
-    return k_virtual, bss
+    return k_virtual, bss_virtual
 
 
 # -
 
 def compute_emit_bayesian(
     k,
-    y,
+    beamsize,
     q_len,
-    rmat_quad_to_screen,
+    rmat,
     beta0=1.,
     alpha0=0.,
     n_samples=10000,
@@ -600,13 +614,13 @@ def compute_emit_bayesian(
         representing the measurement quad geometric focusing strengths in [m^-2]
         used in the emittance scan
 
-        y: 1d numpy array of shape (n_steps_quad_scan, )
+        beamsize: 1d numpy array of shape (n_steps_quad_scan, )
             representing the root-mean-square beam size measurements in [m] of an emittance scan
             with inputs given by k
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
                     
-        rmat_quad_to_screen: tensor containing the (fixed) 2x2 R matrix describing the transport from the end of the 
+        rmat: tensor containing the (fixed) 2x2 R matrix describing the transport from the end of the 
                 measurement quad to the observation screen.
                 
         beta0: the design beta twiss parameter at the screen
@@ -642,11 +656,11 @@ def compute_emit_bayesian(
         tkwargs = {"dtype": torch.double, "device": "cpu"}
 
     k = torch.tensor(k, **tkwargs)
-    y = torch.tensor(y, **tkwargs)
+    beamsize = torch.tensor(beamsize, **tkwargs)
 
-    k_virtual, bss = fit_gp_quad_scan(
+    k_virtual, bss_virtual = fit_gp_quad_scan(
         k=k,
-        y=y,
+        y=beamsize,
         n_samples=n_samples,
         n_steps_quad_scan=n_steps_quad_scan,
         covar_module=covar_module,
@@ -654,10 +668,10 @@ def compute_emit_bayesian(
         tkwargs=tkwargs
     )
     
-    (emit, bmag, sig, is_valid) = compute_emit(k=k_virtual, 
-                                                              y_batch=bss, 
+    (emit, bmag, sig, is_valid) = compute_emit_bmag(k=k_virtual, 
+                                                              beamsize_squared=bss_virtual, 
                                                               q_len=q_len, 
-                                                              rmat_quad_to_screen=rmat_quad_to_screen, 
+                                                              rmat=rmat, 
                                                               beta0=beta0, 
                                                               alpha0=alpha0)
 
@@ -671,19 +685,19 @@ def compute_emit_bayesian(
 
     if visualize:
         plot_valid_thick_quad_fits(k=k, 
-                                   y=y, 
+                                   beamsize=beamsize, 
                                    q_len=q_len, 
-                                   rmat_quad_to_screen=rmat_quad_to_screen,
+                                   rmat=rmat,
                                    emit=emit_valid, 
                                    bmag=bmag_valid,
                                    sig=sig_valid, 
                                    k_virtual=k_virtual,
-                                   bss_virtual=bss,
+                                   bss_virtual=bss_virtual,
                                   )
     return emit_valid, bmag_valid, sig_valid, sample_validity_rate
 
 
-def plot_valid_thick_quad_fits(k, y, q_len, rmat_quad_to_screen, emit, bmag, sig, ci=0.95, tkwargs=None, k_virtual=None, bss_virtual=None):
+def plot_valid_thick_quad_fits(k, beamsize, q_len, rmat, emit, bmag, sig, ci=0.95, tkwargs=None, k_virtual=None, bss_virtual=None):
     """
     A function to plot the physically valid fit results
     produced by get_valid_emit_bmag_samples_from_quad_scan().
@@ -694,7 +708,7 @@ def plot_valid_thick_quad_fits(k, y, q_len, rmat_quad_to_screen, emit, bmag, sig
         representing the measurement quad geometric focusing strengths in [m^-2]
         used in the emittance scan
 
-        y: 1d numpy array of shape (n_steps_quad_scan, )
+        beamsize: 1d numpy array of shape (n_steps_quad_scan, )
             representing the root-mean-square beam size measurements in [m] of an emittance scan
             with inputs given by k
 
@@ -716,14 +730,14 @@ def plot_valid_thick_quad_fits(k, y, q_len, rmat_quad_to_screen, emit, bmag, sig
 
         tkwargs: dict containing the tensor device and dtype
     """
-
+    
     if tkwargs is None:
         tkwargs = {"dtype": torch.double, "device": "cpu"}
 
     k_fit = torch.linspace(k.min(), k.max(), 10, **tkwargs)
     quad_rmats = build_quad_rmat(k_fit, q_len) # result shape (len(k_fit) x 2 x 2)
-    total_rmats = rmat_quad_to_screen.reshape(1,2,2) @ quad_rmats # result shape (len(k_fit) x 2 x 2)
-    sig_final = propagate_sig(sig, emit, total_rmats)[0] # result shape len(sig) x len(k_fit) x 3 x 1
+    total_rmats = rmat.reshape(1,2,2).double() @ quad_rmats.double() # result shape (len(k_fit) x 2 x 2)
+    sig_final = propagate_beam_quad_scan(sig, emit, total_rmats)[0] # result shape len(sig) x len(k_fit) x 3 x 1
     bss_fit = sig_final[:,:,0,0]
 
     upper_quant = torch.quantile(bss_fit.sqrt(), q=0.5 + ci / 2.0, dim=0)
@@ -752,7 +766,7 @@ def plot_valid_thick_quad_fits(k, y, q_len, rmat_quad_to_screen, emit, bmag, sig
                                         zorder=0) 
     
     obs = ax.scatter(
-        k, y*1.e6, marker="x", s=120, c="orange", label="Measurements", zorder=2
+        k, beamsize*1.e6, marker="x", s=120, c="orange", label="Measurements", zorder=2
     )
     ax.set_title("Beam Size at Screen")
     ax.set_xlabel(r"Measurement Quad Geometric Focusing Strength ($[k]=m^{-2}$)")

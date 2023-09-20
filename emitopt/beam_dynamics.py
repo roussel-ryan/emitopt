@@ -378,7 +378,7 @@ def beam_matrix_from_quad_scan(k, beamsize_squared, q_len, rmat):
             representing the measurement quad geometric focusing strengths in [m^-2]
             used in a batch of emittance scans
 
-        msbs: torch tensor of shape (batchshape x n_steps_quad_scan),
+        beamsize_squared: torch tensor of shape (batchshape x n_steps_quad_scan),
                 where each row represents the mean-square beamsize outputs in [m^2] of an emittance scan
                 with inputs given by k
 

@@ -40,10 +40,10 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
     q_len: float = Field(
         description="the longitudinal thickness of the measurement quadrupole"
     )
-    rmat_x: Tensor = Field(
+    rmat_x: Tensor = Field(None,
         description="tensor shape 2x2 containing downstream rmat for x dimension"
     )
-    rmat_y: Tensor = Field(
+    rmat_y: Tensor = Field(None,
         description="tensor shape 2x2 containing downstream rmat for y dimension"
     )
     meas_dim: int = Field(
@@ -69,7 +69,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         if not (self.x_key or self.y_key):
             raise ValueError("must provide a key for x, y, or both.")
         if (self.x_key and not self.rmat_x) or (self.y_key and not self.rmat_y):
-            raise ValueError("must provide rmat for each transerse dimension (x/y) being modeled.")
+            raise ValueError("must provide rmat for each transverse dimension (x/y) being modeled.")
     
         tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
         cpu_tkwargs = {"dtype": torch.double, "device": "cpu"}

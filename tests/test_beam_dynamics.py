@@ -12,15 +12,15 @@ class TestBeamDynamics:
         test_emit_data = yaml.safe_load(TEST_EMIT_YAML)['values']
         # generate input args for x and y emit calc
         input_dicts = [{'k': torch.tensor(test_emit_data['k_x']),
-         'y': torch.tensor(test_emit_data['xrms'])**2,
+         'beamsize_squared': torch.tensor(test_emit_data['xrms'])**2,
          'q_len': torch.tensor(test_emit_data['q_len']),
-         'rmat_quad_to_screen': torch.tensor(test_emit_data['rmat_x']),
+         'rmat': torch.tensor(test_emit_data['rmat_x']),
          'beta0': torch.tensor(test_emit_data['beta0_x']),
          'alpha0': torch.tensor(test_emit_data['alpha0_x'])},
          {'k': torch.tensor(test_emit_data['k_y']),
-         'y': torch.tensor(test_emit_data['yrms'])**2,
+         'beamsize_squared': torch.tensor(test_emit_data['yrms'])**2,
          'q_len': torch.tensor(test_emit_data['q_len']),
-         'rmat_quad_to_screen': torch.tensor(test_emit_data['rmat_y']),
+         'rmat': torch.tensor(test_emit_data['rmat_y']),
          'beta0': torch.tensor(test_emit_data['beta0_y']),
          'alpha0': torch.tensor(test_emit_data['alpha0_y'])}
         ]

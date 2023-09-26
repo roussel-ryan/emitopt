@@ -237,8 +237,7 @@ def fit_gp_quad_scan(
         the mean-square beamsize results of a virtual quad scan evaluated at the points k_virtual.
     """
     
-    if tkwargs is None:
-        tkwargs = {"dtype": torch.double, "device": "cpu"}
+    tkwargs = twkargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
         
     k = torch.tensor(k, **tkwargs)
     y = torch.tensor(y, **tkwargs)
@@ -336,8 +335,7 @@ def compute_emit_bayesian(
         sample_validity_rate: a float between 0 and 1 that describes the rate at which the samples
                         were physically valid/retained.
     """
-    if tkwargs is None:
-        tkwargs = {"dtype": torch.double, "device": "cpu"}
+    tkwargs = twkargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
 
     k = torch.tensor(k, **tkwargs)
     beamsize = torch.tensor(beamsize, **tkwargs)
@@ -415,8 +413,7 @@ def plot_valid_thick_quad_fits(k, beamsize, q_len, rmat, emit, bmag, sig, ci=0.9
         tkwargs: dict containing the tensor device and dtype
     """
     
-    if tkwargs is None:
-        tkwargs = {"dtype": torch.double, "device": "cpu"}
+    tkwargs = twkargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
 
     k_fit = torch.linspace(k.min(), k.max(), 10, **tkwargs)
     quad_rmats = build_quad_rmat(k_fit, q_len) # result shape (len(k_fit) x 2 x 2)

@@ -36,6 +36,7 @@ def compute_emit_bmag(k, beamsize_squared, q_len, rmat, beta0=1., alpha0=0., get
         
     SOURCE PAPER: http://www-library.desy.de/preparch/desy/thesis/desy-thesis-05-014.pdf
     """
+    # get initial sigma 
     sig, total_rmats = beam_matrix_from_quad_scan(k, beamsize_squared, q_len, rmat)
     
     emit = torch.sqrt(sig[...,0,0]*sig[...,2,0] - sig[...,1,0]**2) # result shape (batchshape)
@@ -54,8 +55,8 @@ def compute_emit_bmag(k, beamsize_squared, q_len, rmat, beta0=1., alpha0=0., get
 
 def beam_matrix_from_quad_scan(k, beamsize_squared, q_len, rmat):
     """
-    A function that reconstructs the beam matrices corresponding to a set of quadrupole measurement scans
-    using a thick quad model.
+    Reconstructs the beam matrices corresponding to a set of quadrupole measurement scans
+    using a thick quad model and the pseudoinverse method.
 
     Parameters:
         k: torch tensor of shape (n_steps_quad_scan,) or (batchshape x n_steps_quad_scan),
@@ -71,6 +72,9 @@ def beam_matrix_from_quad_scan(k, beamsize_squared, q_len, rmat):
         rmat: tensor shape (2x2) or (batchshape x 2 x 2)
                 containing the 2x2 R matrices describing the transport from the end of the 
                 measurement quad to the observation screen.
+                
+    Outputs:
+        
     """
     
     # construct the A matrix from eq. (3.2) & (3.3) of source paper
@@ -237,7 +241,7 @@ def fit_gp_quad_scan(
         the mean-square beamsize results of a virtual quad scan evaluated at the points k_virtual.
     """
     
-    tkwargs = twkargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
+    tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
         
     k = torch.tensor(k, **tkwargs)
     y = torch.tensor(y, **tkwargs)

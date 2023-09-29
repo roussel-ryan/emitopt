@@ -30,6 +30,7 @@ def unif_random_sample_domain(n_samples, domain):
     return x_samples
 
 
+# +
 class ScipyMinimizeEmittanceXY(Algorithm, ABC):
     name = "ScipyMinimizeEmittance"
     x_key: str = Field(None,
@@ -114,7 +115,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         # minimize
         def target_func_for_scipy(x_tuning_flat):
             return (
-                self.sum_samplewise_emittance(
+                self.sum_samplewise_emittance_target(
                     sample_funcs_list,
                     torch.tensor(x_tuning_flat, **cpu_tkwargs),
                     bounds,
@@ -125,7 +126,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
             )
 
         def target_func_for_torch(x_tuning_flat):
-            return self.sum_samplewise_emittance(
+            return self.sum_samplewise_emittance_target(
                     sample_funcs_list,
                     x_tuning_flat,
                     bounds,
@@ -190,11 +191,12 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
             self.n_samples, 1, -1
         )  # each row represents its respective sample's optimal tuning config
 
-        emit_best, is_valid = self.compute_samplewise_emittance(sample_funcs_list, 
+        emit_target_best, is_valid = self.compute_samplewise_emittance_target(sample_funcs_list, 
                                                                            x_tuning_best, 
                                                                            bounds, 
                                                                            tkwargs=cpu_tkwargs)
-
+        emit_best = emit_target_best.pow(0.25)
+        
         xs_exe = self.get_meas_scan_inputs(x_tuning_best, bounds, cpu_tkwargs)
 
         # evaluate posterior samples at input locations
@@ -273,7 +275,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
 
         return x
     
-    def compute_samplewise_emittance(self, sample_funcs_list, x_tuning, bounds, tkwargs:dict=None):
+    def compute_samplewise_emittance_target(self, sample_funcs_list, x_tuning, bounds, tkwargs:dict=None):
         # x_tuning: tensor shape (self.n_samples x n_tuning_configs x ndim-1)
         assert x_tuning.shape[0] == self.n_samples
         tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
@@ -315,22 +317,27 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         
         emit_squared = sig[...,0,0]*sig[...,2,0] - sig[...,1,0]**2 # result shape (n_samples) or (2*n_samples)
         
+#         if self.x_key and self.y_key:
+#             res = (emit_squared[:self.n_samples].abs().sqrt() * 
+#                             emit_squared[self.n_samples:].abs().sqrt()).sqrt()
+#             is_valid = torch.logical_and(is_valid[:self.n_samples], is_valid[self.n_samples:])
+#         else:
+#             res = emit_squared.abs().sqrt()
         if self.x_key and self.y_key:
-            res = (emit_squared[:self.n_samples].abs().sqrt() * 
-                            emit_squared[self.n_samples:].abs().sqrt()).sqrt()
+            res = (emit_squared[:self.n_samples].pow(2) * 
+                   emit_squared[self.n_samples:].pow(2)).sqrt()
             is_valid = torch.logical_and(is_valid[:self.n_samples], is_valid[self.n_samples:])
         else:
-            res = emit_squared.abs().sqrt()
-
+            res = emit_squared.pow(2)
 
         return res, is_valid
             
-    def sum_samplewise_emittance(self, sample_funcs_list, x_tuning_flat, bounds, tkwargs):
+    def sum_samplewise_emittance_target(self, sample_funcs_list, x_tuning_flat, bounds, tkwargs):
         assert len(x_tuning_flat.shape) == 1 and len(x_tuning_flat) == self.n_samples * (bounds.shape[1]-1)
         
         x_tuning = x_tuning_flat.double().reshape(self.n_samples, 1, -1)
 
-        sample_emittance = self.compute_samplewise_emittance(sample_funcs_list, 
+        sample_emittance = self.compute_samplewise_emittance_target(sample_funcs_list, 
                                                                              x_tuning, 
                                                                              bounds, 
                                                                              tkwargs)[0]
@@ -340,6 +347,8 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
 #         print('sample_targets_sum=',sample_targets_sum)
         return sample_targets_sum
 
+
+# -
 
 class ScipyBeamAlignment(Algorithm, ABC):
     name = "ScipyBeamAlignment"

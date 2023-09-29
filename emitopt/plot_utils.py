@@ -99,7 +99,7 @@ import matplotlib.patches as mpatches
 # -
 
 def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, show_valid_only=True):
-    ndim = results[1]["x_tuning_best"].shape[1]
+    ndim = results[1]["x_tuning_best"].shape[-1]
     niter = max(results.keys())
     nsamples = results[1]["x_tuning_best"].shape[0]
 
@@ -107,6 +107,7 @@ def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, 
         tuning_parameter_names = ['tp_' + str(i) for i in range(ndim)]
     
     fig, axs = plt.subplots(ndim, 1)
+    fig.set_size_inches(8,3*ndim)
 
     for i in range(ndim):
 
@@ -131,6 +132,8 @@ def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, 
                            results[key]["x_tuning_best"][...,i].flatten(),
                            c='C0')
     plt.tight_layout()
+    
+    return fig, axs
 
 
 def plot_sample_optima_convergence_emits(results):
@@ -147,6 +150,8 @@ def plot_sample_optima_convergence_emits(results):
                    results[key]["emit_best"].flatten().detach(), 
                    c='C0')
     plt.tight_layout()
+    
+    return fig, ax
 
 
 def plot_valid_emit_prediction_at_x_tuning(model, 
@@ -446,11 +451,10 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
                     
         X_tuning_scan = X_tuned.repeat(100,1)
         ls = torch.linspace(*optimizer.vocs.bounds.T[scan_dim],100)
-        ls = torch.linspace(-1,1,100)
         X_tuning_scan[:,i] = ls
         X_tuning_scan = X_tuning_scan.repeat(optimizer.generator.algorithm.n_samples, 1, 1)
         sample_funcs_list = optimizer.generator.algorithm_results['sample_funcs_list']
-        emit, is_valid = optimizer.generator.algorithm.compute_samplewise_emittance(sample_funcs_list, 
+        emit, is_valid = optimizer.generator.algorithm.compute_samplewise_emittance_target(sample_funcs_list, 
                                                                                      X_tuning_scan, 
                                                                                      optimizer.vocs.bounds
                                                                                     )
@@ -472,7 +476,7 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
             ax.legend()
 
     plt.tight_layout()
-    return fig, ax
+    return fig, axs
 
 
 # -

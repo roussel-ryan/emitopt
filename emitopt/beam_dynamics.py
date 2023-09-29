@@ -2,7 +2,7 @@ import torch
 from matplotlib import pyplot as plt
 
 
-def compute_emit_bmag(k, beamsize_squared, q_len, rmat, beta0=1., alpha0=0., get_bmag=True):
+def compute_emit_bmag(k, beamsize_squared, q_len, rmat, beta0=1., alpha0=0., get_bmag=True, thick=True):
     """
     A function that computes the emittance(s) corresponding to a set of quadrupole measurement scans
     using a thick quad model.
@@ -37,7 +37,7 @@ def compute_emit_bmag(k, beamsize_squared, q_len, rmat, beta0=1., alpha0=0., get
     SOURCE PAPER: http://www-library.desy.de/preparch/desy/thesis/desy-thesis-05-014.pdf
     """
     # get initial sigma 
-    sig, total_rmats = beam_matrix_from_quad_scan(k, beamsize_squared, q_len, rmat)
+    sig, total_rmats = beam_matrix_from_quad_scan(k, beamsize_squared, q_len, rmat, thick=thick)
     
     emit = torch.sqrt(sig[...,0,0]*sig[...,2,0] - sig[...,1,0]**2) # result shape (batchshape)
     
@@ -53,7 +53,7 @@ def compute_emit_bmag(k, beamsize_squared, q_len, rmat, beta0=1., alpha0=0., get
     return emit, bmag, sig, is_valid
 
 
-def beam_matrix_from_quad_scan(k, beamsize_squared, q_len, rmat):
+def beam_matrix_from_quad_scan(k, beamsize_squared, q_len, rmat, thick=True):
     """
     Reconstructs the beam matrices corresponding to a set of quadrupole measurement scans
     using a thick quad model and the pseudoinverse method.
@@ -78,7 +78,7 @@ def beam_matrix_from_quad_scan(k, beamsize_squared, q_len, rmat):
     """
     
     # construct the A matrix from eq. (3.2) & (3.3) of source paper
-    quad_rmats = build_quad_rmat(k, q_len) # result shape (batchshape x nsteps x 2 x 2)
+    quad_rmats = build_quad_rmat(k, q_len, thick=thick) # result shape (batchshape x nsteps x 2 x 2)
     total_rmats = rmat.unsqueeze(-3).double() @ quad_rmats.double() 
     # result shape (batchshape x nsteps x 2 x 2)
     
@@ -169,22 +169,25 @@ def twiss_transport_mat_from_rmat(rmat):
     return result
 
 
-def build_quad_rmat(k, q_len):
-    eps = 2.220446049250313e-16  # machine epsilon to double precision
-    sqrt_k = k.abs().sqrt() + eps
-    c, s, cp, sp = (
-                    torch.cos(sqrt_k*q_len)*(k >= 0) + torch.cosh(sqrt_k*q_len)*(k < 0), 
-                    1./sqrt_k * torch.sin(sqrt_k*q_len)*(k >= 0) + 1./sqrt_k * torch.sinh(sqrt_k*q_len)*(k < 0),
-                    -sqrt_k * torch.sin(sqrt_k*q_len)*(k >= 0) + sqrt_k * torch.sinh(sqrt_k*q_len)*(k < 0), 
-                    torch.cos(sqrt_k*q_len)*(k >= 0) + torch.cosh(sqrt_k*q_len)*(k < 0)
-                   )
-
+def build_quad_rmat(k, q_len, thick=True):
+    if thick:
+        eps = 2.220446049250313e-16  # machine epsilon to double precision
+        sqrt_k = k.abs().sqrt() + eps
+        c, s, cp, sp = (
+                        torch.cos(sqrt_k*q_len)*(k >= 0) + torch.cosh(sqrt_k*q_len)*(k < 0), 
+                        1./sqrt_k * torch.sin(sqrt_k*q_len)*(k >= 0) + 1./sqrt_k * torch.sinh(sqrt_k*q_len)*(k < 0),
+                        -sqrt_k * torch.sin(sqrt_k*q_len)*(k >= 0) + sqrt_k * torch.sinh(sqrt_k*q_len)*(k < 0), 
+                        torch.cos(sqrt_k*q_len)*(k >= 0) + torch.cosh(sqrt_k*q_len)*(k < 0)
+                       )
+    else:
+        c, s, cp, sp = (torch.ones_like(k), torch.zeros_like(k), -k.abs()*q_len, torch.ones_like(k))
+        
     result = torch.stack((
         torch.stack((c, s), dim=-1), 
         torch.stack((cp, sp), dim=-1),), 
         dim=-2
     )
-    
+     
     return result
 
 

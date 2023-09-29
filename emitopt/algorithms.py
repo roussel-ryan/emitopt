@@ -14,6 +14,7 @@ from .sampling import (
     draw_linear_product_kernel_post_paths,
     draw_product_kernel_post_paths,
 )
+from botorch.sampling.pathwise.posterior_samplers import draw_matheron_paths
 
 from emitopt.beam_dynamics import compute_emit_bmag
 
@@ -29,7 +30,6 @@ def unif_random_sample_domain(n_samples, domain):
     return x_samples
 
 
-# +
 class ScipyMinimizeEmittanceXY(Algorithm, ABC):
     name = "ScipyMinimizeEmittance"
     x_key: str = Field(None,
@@ -55,6 +55,8 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
     )
     scipy_options: dict = Field(
         None, description="options to pass to scipy minimize")
+    thick_quad: bool = Field(True,
+        description="Whether to use thick-quad (or thin, if False) transport for emittance calc")
 
     @property
     def output_names_ordered(self) -> list:  
@@ -66,7 +68,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         # get observable model names in the order they appear in the model (ModelList)
         return [key for key in [self.x_key, self.y_key] if key]
     
-    def get_execution_paths(self, model: ModelList, bounds: Tensor, tkwargs=None, verbose=False):
+    def get_execution_paths(self, model: ModelList, bounds: Tensor, tkwargs=None, verbose=True):
         if not (self.x_key or self.y_key):
             raise ValueError("must provide a key for x, y, or both.")
         if (self.x_key and self.rmat_x is None) or (self.y_key and self.rmat_y is None):
@@ -80,13 +82,18 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         sample_funcs_list = [draw_product_kernel_post_paths(
             cpu_model, n_samples=self.n_samples
         ) for cpu_model in cpu_models]
+#         sample_funcs_list = [draw_matheron_paths(
+#             cpu_model, sample_shape=torch.Size([self.n_samples])
+#         ) for cpu_model in cpu_models]
 
-        ##############
+        temp_id = self.meas_dim + 1
+        tuning_domain = torch.cat((bounds.T[: self.meas_dim], bounds.T[temp_id:]))
+#         #############
 #         xs_tuning_init = unif_random_sample_domain(
 #             self.n_samples, tuning_domain
 #         ).double()
 #         x_tuning_init = xs_tuning_init.flatten()
-        ##############
+#         #############
         if len(self.output_names_ordered) == 1:
             bss = model.models[0].outcome_transform.untransform(model.models[0].train_targets)[0]
         if len(self.output_names_ordered) == 2:
@@ -124,7 +131,10 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
                     bounds,
                     cpu_tkwargs
                 )
-        
+#         torch_target = target_func_for_torch(torch.zeros(self.n_samples))
+#         scipy_target = target_func_for_scipy(torch.zeros(self.n_samples))
+#         print('torch_target=',torch_target)
+#         print('scipy_target=',scipy_target)
         def target_jac_for_scipy(x):
 #             val = torch.autograd.functional.jacobian(
 #                     target_func_for_torch, torch.tensor(x, **cpu_tkwargs)
@@ -141,8 +151,6 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
 
         
         # get bounds for sample emittance minimization (tuning domain)
-        temp_id = self.meas_dim + 1
-        tuning_domain = torch.cat((bounds.T[: self.meas_dim], bounds.T[temp_id:]))
         bounds_for_scipy = tuning_domain.repeat(self.n_samples, 1).detach().cpu().numpy()
         
         # perform sample emittance minimization
@@ -298,18 +306,23 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
             rmat_y = self.rmat_y.to(**tkwargs).repeat(*x_tuning.shape[:-1],1,1)
             rmat = torch.cat((rmat_x, rmat_y)) # shape (2*n_samples x 2 x 2)
 
-        sig, is_valid = compute_emit_bmag(k, beamsize_squared, self.q_len, rmat, get_bmag=False)[-2:]
+        sig, is_valid = compute_emit_bmag(k, 
+                                          beamsize_squared, 
+                                          self.q_len, rmat, 
+                                          get_bmag=False, 
+                                          thick=self.thick_quad)[-2:]
         # result shape (n_samples x 3 x 1) or (2*n_samples x 3 x 1), (n_samples) or (2*n_samples)
         
         emit_squared = sig[...,0,0]*sig[...,2,0] - sig[...,1,0]**2 # result shape (n_samples) or (2*n_samples)
         
         if self.x_key and self.y_key:
             res = (emit_squared[:self.n_samples].abs().sqrt() * 
-                            emit_squared[self.n_samples:].abs().sqrt()).sqrt().pow(4)
+                            emit_squared[self.n_samples:].abs().sqrt()).sqrt()
             is_valid = torch.logical_and(is_valid[:self.n_samples], is_valid[self.n_samples:])
         else:
-            res = emit_squared.abs().sqrt().pow(4)
-        
+            res = emit_squared.abs().sqrt()
+
+
         return res, is_valid
             
     def sum_samplewise_emittance(self, sample_funcs_list, x_tuning_flat, bounds, tkwargs):
@@ -317,18 +330,16 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         
         x_tuning = x_tuning_flat.double().reshape(self.n_samples, 1, -1)
 
-        sample_emittance_squared = self.compute_samplewise_emittance(sample_funcs_list, 
+        sample_emittance = self.compute_samplewise_emittance(sample_funcs_list, 
                                                                              x_tuning, 
                                                                              bounds, 
                                                                              tkwargs)[0]
 #         print('x_tuning=', x_tuning)
 #         print('sample_emittance_squared=', sample_emittance_squared)
-        sample_targets_sum = torch.sum(sample_emittance_squared)
+        sample_targets_sum = torch.sum(sample_emittance)
 #         print('sample_targets_sum=',sample_targets_sum)
         return sample_targets_sum
 
-
-# -
 
 class ScipyBeamAlignment(Algorithm, ABC):
     name = "ScipyBeamAlignment"

@@ -427,6 +427,7 @@ def plot_pathwise_surface_samples_2d(optimizer): # paper figure
         plt.show()
 
 
+# +
 def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_truth_emittance_fn=None):
     #select sample result
     X_tuned = optimizer.generator.algorithm_results['x_tuning_best'][sid:sid+1, 0, :]
@@ -445,6 +446,7 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
                     
         X_tuning_scan = X_tuned.repeat(100,1)
         ls = torch.linspace(*optimizer.vocs.bounds.T[scan_dim],100)
+        ls = torch.linspace(-1,1,100)
         X_tuning_scan[:,i] = ls
         X_tuning_scan = X_tuning_scan.repeat(optimizer.generator.algorithm.n_samples, 1, 1)
         sample_funcs_list = optimizer.generator.algorithm_results['sample_funcs_list']
@@ -455,10 +457,11 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
 
         ax = axs[i]
 
-        if ground_truth_emittance_fn is not None:
-            gt_emits, gt_emit_xy = ground_truth_emittance_fn(x_tuning=X_tuning_scan)
-            ax.plot(ls, gt_emits, c='k', label='ground truth')
-        ax.plot(ls.cpu(), emit[sid].detach().cpu()*1.e-6, label='Sample ' + str(sid))
+#         if ground_truth_emittance_fn is not None:
+#             emit_min = torch.sqrt(6.29e-09 * 1.28e-08)*1.e6
+#             gt_emits, gt_emit_xy = ground_truth_emittance_fn(emit_min=emit_min, x_tuning=X_tuning_scan)
+#             ax.plot(ls, gt_emits, c='k', label='ground truth')
+        ax.plot(ls.cpu(), emit[sid].detach().cpu(), label='Sample ' + str(sid))
         ax.axvline(X_tuned[0,i].cpu(), c='r', label='Sample optimization result')
         ax.axhline(0, c='k', ls='--', label='physical cutoff')
 
@@ -469,8 +472,10 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
             ax.legend()
 
     plt.tight_layout()
-    plt.show()
+    return fig, ax
 
+
+# -
 
 def plot_posterior_mean_modeled_emittance(optimizer, x_tuning, ground_truth_emittance_fn=None):
     

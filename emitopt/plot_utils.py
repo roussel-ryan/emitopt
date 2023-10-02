@@ -264,7 +264,7 @@ def plot_pathwise_surface_samples_2d(optimizer): # paper figure
             X, Y = torch.meshgrid(xlin, ylin)
             XY = torch.cat((X.reshape(-1,1), Y.reshape(-1,1)), dim=1)
             print(XY.shape)
-            Z = optimizer.generator.algorithm_results['post_paths_cpu'](XY)[s].reshape(X.shape).detach()
+            Z = optimizer.generator.algorithm_results['sample_funcs_list'][0](XY)[s].reshape(X.shape).detach()
             cmap='viridis'
             surf = ax.plot_surface(Y, X, Z, cmap=cmap,
                                    linewidth=0, antialiased=True, alpha=0.3, rasterized=True)
@@ -480,6 +480,51 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
 
 
 # -
+
+def plot_virtual_emittance_vs_tuning(optimizer, x_tuned, ci=0.95):
+    #extract GP models
+    model = optimizer.generator.train_model()
+    bax_model_ids = [optimizer.generator.vocs.output_names.index(name)
+                            for name in optimizer.generator.algorithm.model_names_ordered]
+    bax_model = model.subset_output(bax_model_ids)
+    meas_dim = optimizer.generator.algorithm.meas_dim
+    bounds = optimizer.generator._get_optimization_bounds()
+    tuning_domain = torch.cat((bounds.T[: meas_dim], bounds.T[meas_dim + 1:]))
+    n_tuning_dims = x_tuned.shape[1]
+    fig, axs = plt.subplots(2, n_tuning_dims)
+    fig.set_size_inches(3*n_tuning_dims, 6)
+        
+    for i in range(tuning_domain.shape[0]):
+        # do a scan of the posterior emittance (via valid sampling)
+        x_scan = torch.linspace(*tuning_domain[i], 100)
+        x_tuning = x_tuned.repeat(100, 1)
+        x_tuning[:,i] = x_scan
+        emit, is_valid, validity_rate = optimizer.generator.algorithm.draw_posterior_emittance_samples(bax_model, x_tuning, bounds)
+        quants = torch.tensor([])
+        
+        for j in range(len(x_scan)):
+            cut_ids = torch.tensor(range(len(emit[:,j])))[is_valid[:,j]]
+            emit_valid = torch.index_select(emit[:,j], dim=0, index=cut_ids)
+            q = torch.tensor([(1.-ci)/2., 0.5, (1.+ci)/2.])
+            quant = torch.quantile(emit_valid, q=q, dim=0).reshape(1,-1)
+            quants = torch.cat((quants, quant))
+            
+        if n_tuning_dims==1:
+            ax = axs[0]
+        else:
+            ax = axs[0,i]
+        ax.fill_between(x_scan, quants[:,0], quants[:,2], alpha=0.3)
+        ax.plot(x_scan, quants[:,1])
+        ax.axvline(x_tuned[0,i], c='r')
+        
+        if n_tuning_dims==1:
+            ax = axs[1]
+        else:
+            ax = axs[1,i]
+        ax.plot(x_scan, validity_rate, c='m')
+
+    return fig, axs
+
 
 def plot_posterior_mean_modeled_emittance(optimizer, x_tuning, ground_truth_emittance_fn=None):
     

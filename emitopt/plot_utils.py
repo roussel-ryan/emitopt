@@ -481,7 +481,9 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
 
 # -
 
-def plot_virtual_emittance_vs_tuning(optimizer, x_tuned, ci=0.95):
+def plot_virtual_emittance_vs_tuning(optimizer, x_origin, ci=0.95, tkwargs:dict=None, n_samples=10000):
+    tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
+    
     #extract GP models
     model = optimizer.generator.train_model()
     bax_model_ids = [optimizer.generator.vocs.output_names.index(name)
@@ -495,33 +497,42 @@ def plot_virtual_emittance_vs_tuning(optimizer, x_tuned, ci=0.95):
     tuning_param_names = optimizer.vocs.variable_names
     del tuning_param_names[meas_dim]
     
-    n_tuning_dims = x_tuned.shape[1]
+    algorithm = optimizer.generator.algorithm
+    
+    n_tuning_dims = x_origin.shape[1]
     
     fig, axs = plt.subplots(2, n_tuning_dims, sharex='col')
     fig.set_size_inches(3*n_tuning_dims, 6)
         
     for i in range(tuning_domain.shape[0]):
         # do a scan of the posterior emittance (via valid sampling)
-        x_scan = torch.linspace(*tuning_domain[i], 100)
-        x_tuning = x_tuned.repeat(100, 1)
+        x_scan = torch.linspace(*tuning_domain[i], 100, **tkwargs)
+        x_tuning = x_origin.repeat(100, 1)
         x_tuning[:,i] = x_scan
-        emit, is_valid, validity_rate = optimizer.generator.algorithm.draw_posterior_emittance_samples(bax_model, x_tuning, bounds)
+        emit, is_valid, validity_rate = algorithm.draw_posterior_emittance_samples(bax_model, 
+                                                                                   x_tuning, 
+                                                                                   bounds,
+                                                                                   tkwargs,
+                                                                                   n_samples)
         quants = torch.tensor([])
         
         for j in range(len(x_scan)):
-            cut_ids = torch.tensor(range(len(emit[:,j])))[is_valid[:,j]]
+            cut_ids = torch.tensor(range(len(emit[:,j])), device=tkwargs['device'])[is_valid[:,j]]
             emit_valid = torch.index_select(emit[:,j], dim=0, index=cut_ids)
-            q = torch.tensor([(1.-ci)/2., 0.5, (1.+ci)/2.])
-            quant = torch.quantile(emit_valid, q=q, dim=0).reshape(1,-1)
+            q = torch.tensor([(1.-ci)/2., 0.5, (1.+ci)/2.], **tkwargs)
+            if len(cut_ids)>=3:
+                quant = torch.quantile(emit_valid, q=q, dim=0).reshape(1,-1)
+            else:
+                quant = torch.tensor([[float('nan'), float('nan'), float('nan')]], **tkwargs)
             quants = torch.cat((quants, quant))
-            
+
         if n_tuning_dims==1:
             ax = axs[0]
         else:
             ax = axs[0,i]
         ax.fill_between(x_scan, quants[:,0], quants[:,2], alpha=0.3)
         ax.plot(x_scan, quants[:,1])
-        ax.axvline(x_tuned[0,i], c='r')
+        ax.axvline(x_origin[0,i], c='r')
         
         ax.set_xlabel(tuning_param_names[i])
         if i==0:
@@ -533,7 +544,7 @@ def plot_virtual_emittance_vs_tuning(optimizer, x_tuned, ci=0.95):
         else:
             ax = axs[1,i]
         ax.plot(x_scan, validity_rate, c='m')
-        ax.axvline(x_tuned[0,i], c='r')
+        ax.axvline(x_origin[0,i], c='r')
 
         ax.set_xlabel(tuning_param_names[i])
         if i==0:

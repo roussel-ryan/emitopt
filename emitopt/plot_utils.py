@@ -454,9 +454,10 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
         X_tuning_scan[:,i] = ls
         X_tuning_scan = X_tuning_scan.repeat(optimizer.generator.algorithm.n_samples, 1, 1)
         sample_funcs_list = optimizer.generator.algorithm_results['sample_funcs_list']
-        emit, is_valid = optimizer.generator.algorithm.compute_samplewise_emittance_target(sample_funcs_list, 
+        emit, is_valid, validity_rate = optimizer.generator.algorithm.draw_posterior_emittance_samples(sample_funcs_list, 
                                                                                      X_tuning_scan, 
-                                                                                     optimizer.vocs.bounds
+                                                                                     optimizer.vocs.bounds,
+                                                                                     transform_target=True,
                                                                                     )
 
         ax = axs[i]
@@ -520,7 +521,7 @@ def plot_virtual_emittance_vs_tuning(optimizer, x_origin, ci=0.95, tkwargs:dict=
             cut_ids = torch.tensor(range(len(emit[:,j])), device=tkwargs['device'])[is_valid[:,j]]
             emit_valid = torch.index_select(emit[:,j], dim=0, index=cut_ids)
             q = torch.tensor([(1.-ci)/2., 0.5, (1.+ci)/2.], **tkwargs)
-            if len(cut_ids)>=3:
+            if len(cut_ids)>=10:
                 quant = torch.quantile(emit_valid, q=q, dim=0).reshape(1,-1)
             else:
                 quant = torch.tensor([[float('nan'), float('nan'), float('nan')]], **tkwargs)

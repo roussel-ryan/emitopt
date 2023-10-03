@@ -31,7 +31,6 @@ def unif_random_sample_domain(n_samples, domain):
     return x_samples
 
 
-# +
 class ScipyMinimizeEmittanceXY(Algorithm, ABC):
     name = "ScipyMinimizeEmittance"
     x_key: str = Field(None,
@@ -88,12 +87,6 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
             if type(cpu_model.covar_module.base_kernel) == MaternKernel:
                 sample_funcs = draw_matheron_paths(cpu_model, sample_shape=torch.Size([self.n_samples]))
             sample_funcs_list += [sample_funcs]
-#         sample_funcs_list = [draw_product_kernel_post_paths(
-#             cpu_model, n_samples=self.n_samples
-#         ) for cpu_model in cpu_models]
-#         sample_funcs_list = [draw_matheron_paths(
-#             cpu_model, sample_shape=torch.Size([self.n_samples])
-#         ) for cpu_model in cpu_models]
 
         temp_id = self.meas_dim + 1
         tuning_domain = torch.cat((bounds.T[: self.meas_dim], bounds.T[temp_id:]))
@@ -199,10 +192,11 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
             self.n_samples, 1, -1
         )  # each row represents its respective sample's optimal tuning config
 
-        emit_target_best, is_valid = self.compute_samplewise_emittance_target(sample_funcs_list, 
-                                                                           x_tuning_best, 
-                                                                           bounds, 
-                                                                           tkwargs=cpu_tkwargs)
+        emit_target_best, is_valid = self.draw_posterior_emittance_samples(sample_funcs_list, 
+                                                                 x_tuning_best, 
+                                                                 bounds, 
+                                                                 tkwargs=cpu_tkwargs,
+                                                                 transform_target=True)[:2]
         emit_best = emit_target_best.pow(0.25)
         
         xs_exe = self.get_meas_scan_inputs(x_tuning_best, bounds, cpu_tkwargs)
@@ -284,107 +278,56 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         )
 
         return x
-    
-    def compute_samplewise_emittance_target(self, sample_funcs_list, x_tuning, bounds, tkwargs:dict=None):
-        # x_tuning: tensor shape (self.n_samples x n_tuning_configs x ndim-1)
-        assert x_tuning.shape[0] == self.n_samples
-        tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
-        
-        x = self.get_meas_scan_inputs(x_tuning, bounds, tkwargs) 
-        # result shape n_samples x n_tuning_configs*n_steps x ndim
-        beamsize_squared_list = [sample_funcs(x).reshape(*x_tuning.shape[:-1], self.n_steps_measurement_param)
-                                 for sample_funcs in sample_funcs_list]
-        # each tensor in beamsize_squared (list) will be shape n_samples x n_tuning_configs x n_steps
-        
-        x = x.reshape(*x_tuning.shape[:-1], self.n_steps_measurement_param, -1)
-        # n_samples x n_tuning_configs x n_steps x ndim
-        
-        if self.x_key and not self.y_key:
-            k = x[..., self.meas_dim] * self.scale_factor # n_samples x n_tuning x n_steps
-            beamsize_squared = beamsize_squared_list[0] # result shape n_samples x n_tuning x n_steps
-            rmat = self.rmat_x.to(**tkwargs).repeat(*x_tuning.shape[:-1],1,1)
-        if self.y_key and not self.x_key:
-            k = x[..., self.meas_dim] * (-1. * self.scale_factor) # n_samples x n_tuning x n_steps
-            beamsize_squared = beamsize_squared_list[0] # result shape n_samples x n_tuning x n_steps
-            rmat = self.rmat_y.to(**tkwargs).repeat(*x_tuning.shape[:-1],1,1)
-        else:
-            k_x = (x[..., self.meas_dim] * self.scale_factor) # n_samples x n_tuning x n_steps
-            k_y = k_x * -1. # n_samples x n_tuning x n_steps
-            k = torch.cat((k_x, k_y)) # shape (2*n_samples x n_tuning x n_steps)
-            
-            beamsize_squared_x, beamsize_squared_y = [beamsize_squared 
-                                                      for beamsize_squared in beamsize_squared_list]
-            beamsize_squared = torch.cat((beamsize_squared_x, beamsize_squared_y)) 
-            # shape (2*n_samples x n_tuning x n_steps)
-
-            rmat_x = self.rmat_x.to(**tkwargs).repeat(*x_tuning.shape[:-1],1,1)
-            rmat_y = self.rmat_y.to(**tkwargs).repeat(*x_tuning.shape[:-1],1,1)
-            rmat = torch.cat((rmat_x, rmat_y)) # shape (2*n_samples x n_tuning x 2 x 2)
-
-        sig, is_valid = compute_emit_bmag(k, 
-                                          beamsize_squared, 
-                                          self.q_len, 
-                                          rmat, 
-                                          get_bmag=False, 
-                                          thick=self.thick_quad)[-2:]
-        # result shape (n_samples x n_tuning x 3 x 1) , (n_samples x n_tuning) 
-        # or (2*n_samples x n_tuning x 3 x 1), (2*n_samples x n_tuning) 
-        
-        emit_squared = sig[...,0,0]*sig[...,2,0] - sig[...,1,0]**2 
-        # result shape (n_samples x n_tuning) or (2*n_samples x n_tuning)
-
-#         if self.x_key and self.y_key:
-#             res = (emit_squared[:self.n_samples].abs().sqrt() * 
-#                             emit_squared[self.n_samples:].abs().sqrt()).sqrt()
-#             is_valid = torch.logical_and(is_valid[:self.n_samples], is_valid[self.n_samples:])
-#         else:
-#             res = emit_squared.abs().sqrt()
-        if self.x_key and self.y_key:
-            res = (emit_squared[:self.n_samples].pow(2) * 
-                   emit_squared[self.n_samples:].pow(2)).sqrt()
-            is_valid = torch.logical_and(is_valid[:self.n_samples], is_valid[self.n_samples:])
-        else:
-            res = emit_squared.pow(2)
-
-        #final shapes: (n_samples x n_tuning)
-        return res, is_valid
             
     def sum_samplewise_emittance_target(self, sample_funcs_list, x_tuning_flat, bounds, tkwargs):
         assert len(x_tuning_flat.shape) == 1 and len(x_tuning_flat) == self.n_samples * (bounds.shape[1]-1)
         
         x_tuning = x_tuning_flat.double().reshape(self.n_samples, 1, -1)
 
-        sample_emittance = self.compute_samplewise_emittance_target(sample_funcs_list, 
-                                                                             x_tuning, 
-                                                                             bounds, 
-                                                                             tkwargs)[0]
-#         print('x_tuning=', x_tuning)
-#         print('sample_emittance_squared=', sample_emittance_squared)
+        sample_emittance = self.draw_posterior_emittance_samples(sample_funcs_list, 
+                                                                 x_tuning, 
+                                                                 bounds, 
+                                                                 tkwargs,
+                                                                 transform_target=True)[0]
+
         sample_targets_sum = torch.sum(sample_emittance)
-#         print('sample_targets_sum=',sample_targets_sum)
+
         return sample_targets_sum
 
-    def draw_posterior_emittance_samples(self, model, x_tuning, bounds, tkwargs:dict=None, n_samples=10000):
-        assert len(x_tuning.shape)==2
+    def draw_posterior_emittance_samples(self, model, x_tuning, bounds, tkwargs:dict=None, n_samples=10000, transform_target=False):
         # x_tuning must be shape n_tuning_configs x n_tuning_dims
         tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
         x = self.get_meas_scan_inputs(x_tuning, bounds, tkwargs) # result shape n_tuning_configs*n_steps x ndim
-        p = model.posterior(x) 
-        bss = p.sample(torch.Size([n_samples])) # result shape n_samples x n_tuning_configs*n_steps x num_outputs (1 or 2)
         
-        x = x.reshape(*x_tuning.shape[:-1], self.n_steps_measurement_param, -1) # result n_tuning_configs x n_steps x ndim
-        x = x.repeat(n_samples,1,1,1) # result shape n_samples x n_tuning_configs x n_steps x ndim
-        bss = bss.reshape(n_samples, x_tuning.shape[0], self.n_steps_measurement_param, -1)
-        # result shape n_samples x n_tuning_configs x n_steps x num_outputs (1 or 2)
-        
+        if isinstance(model, ModelList):
+            assert len(x_tuning.shape)==2
+            p = model.posterior(x) 
+            bss = p.sample(torch.Size([n_samples])) # result shape n_samples x n_tuning_configs*n_steps x num_outputs (1 or 2)
+
+            x = x.reshape(x_tuning.shape[0], self.n_steps_measurement_param, -1) # result n_tuning_configs x n_steps x ndim
+            x = x.repeat(n_samples,1,1,1) 
+            # result shape n_samples x n_tuning_configs x n_steps x ndim
+            bss = bss.reshape(n_samples, x_tuning.shape[0], self.n_steps_measurement_param, -1)
+            # result shape n_samples x n_tuning_configs x n_steps x num_outputs (1 or 2)
+        else:
+            assert x_tuning.shape[0]==self.n_samples
+            beamsize_squared_list = [sample_funcs(x).reshape(*x_tuning.shape[:-1], self.n_steps_measurement_param)
+                                     for sample_funcs in model]
+            # each tensor in beamsize_squared (list) will be shape n_samples x n_tuning_configs x n_steps
+
+            x = x.reshape(*x_tuning.shape[:-1], self.n_steps_measurement_param, -1)
+            # n_samples x n_tuning_configs x n_steps x ndim
+            bss = torch.stack(beamsize_squared_list, dim=-1) 
+            # result shape n_samples x n_tuning_configs x n_steps x num_outputs (1 or 2)
+            
         if self.x_key and not self.y_key:
             k = x[..., self.meas_dim] * self.scale_factor # n_samples x n_tuning x n_steps
             beamsize_squared = bss[...,0] # result shape n_samples x n_tuning x n_steps
-            rmat = self.rmat_x.to(**tkwargs).repeat(n_samples,x_tuning.shape[0],1,1)
+            rmat = self.rmat_x.to(**tkwargs).repeat(*bss.shape[:2],1,1) # n_samples x n_tuning x 2 x 2
         if self.y_key and not self.x_key:
             k = x[..., self.meas_dim] * (-1. * self.scale_factor) # n_samples x n_tuning x n_steps
             beamsize_squared = bss[...,0] # result shape n_samples x n_tuning x n_steps
-            rmat = self.rmat_y.to(**tkwargs).repeat(n_samples,x_tuning.shape[0],1,1)
+            rmat = self.rmat_y.to(**tkwargs).repeat(*bss.shape[:2],1,1) # n_samples x n_tuning x 2 x 2
         else:
             k_x = (x[..., self.meas_dim] * self.scale_factor) # n_samples x n_tuning x n_steps
             k_y = k_x * -1. # n_samples x n_tuning x n_steps
@@ -393,8 +336,8 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
             beamsize_squared = torch.cat((bss[...,0], bss[...,1])) 
             # shape (2*n_samples x n_tuning x n_steps)
 
-            rmat_x = self.rmat_x.to(**tkwargs).repeat(n_samples,x_tuning.shape[0],1,1)
-            rmat_y = self.rmat_y.to(**tkwargs).repeat(n_samples,x_tuning.shape[0],1,1)
+            rmat_x = self.rmat_x.to(**tkwargs).repeat(*bss.shape[:2],1,1)
+            rmat_y = self.rmat_y.to(**tkwargs).repeat(*bss.shape[:2],1,1)
             rmat = torch.cat((rmat_x, rmat_y)) # shape (2*n_samples x n_tuning x 2 x 2)
 
         emit, bmag, sig, is_valid = compute_emit_bmag(k, 
@@ -406,20 +349,28 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         # result shapes: (n_samples x n_tuning), (n_samples x n_tuning), (n_samples x n_tuning x 3 x 1), (n_samples x n_tuning) 
         # or (2*n_samples x n_tuning), (2*n_samples x n_tuning), (2*n_samples x n_tuning x 3 x 1), (2*n_samples x n_tuning) 
 
-        if self.x_key and self.y_key:
-            res = (emit[:n_samples] * emit[n_samples:]).sqrt()
-            is_valid = torch.logical_and(is_valid[:n_samples], is_valid[n_samples:])
+        if transform_target:
+            emit_squared = sig[...,0,0]*sig[...,2,0] - sig[...,1,0]**2 
+            # result shape (n_samples x n_tuning) or (2*n_samples x n_tuning)
+            if self.x_key and self.y_key:
+                res = (emit_squared[:bss.shape[0]].pow(2) * 
+                       emit_squared[bss.shape[0]:].pow(2)).sqrt()
+                is_valid = torch.logical_and(is_valid[:bss.shape[0]], is_valid[bss.shape[0]:])
+            else:
+                res = emit_squared.pow(2)
         else:
-            res = emit
-        #final shapes: n_samples x n_tuning_configs
+            if self.x_key and self.y_key:
+                res = (emit[:bss.shape[0]] * emit[bss.shape[0]:]).sqrt()
+                is_valid = torch.logical_and(is_valid[:bss.shape[0]], is_valid[bss.shape[0]:])
+            else:
+                res = emit
+            #final shapes: n_samples x n_tuning_configs
         
         validity_rate = torch.sum(is_valid, dim=0)/is_valid.shape[0]
         #shape n_tuning_configs
         
         return res, is_valid, validity_rate
 
-
-# -
 
 class ScipyBeamAlignment(Algorithm, ABC):
     name = "ScipyBeamAlignment"

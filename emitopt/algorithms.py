@@ -31,6 +31,7 @@ def unif_random_sample_domain(n_samples, domain):
     return x_samples
 
 
+# +
 class ScipyMinimizeEmittanceXY(Algorithm, ABC):
     name = "ScipyMinimizeEmittance"
     x_key: str = Field(None,
@@ -90,27 +91,27 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
 
         temp_id = self.meas_dim + 1
         tuning_domain = torch.cat((bounds.T[: self.meas_dim], bounds.T[temp_id:]))
+        #############
+        xs_tuning_init = unif_random_sample_domain(
+            self.n_samples, tuning_domain
+        ).double()
+        x_tuning_init = xs_tuning_init.flatten()
 #         #############
-#         xs_tuning_init = unif_random_sample_domain(
-#             self.n_samples, tuning_domain
-#         ).double()
-#         x_tuning_init = xs_tuning_init.flatten()
-#         #############
-        if len(self.output_names_ordered) == 1:
-            bss = model.models[0].outcome_transform.untransform(model.models[0].train_targets)[0]
-        if len(self.output_names_ordered) == 2:
-            bss_x, bss_y = [m.outcome_transform.untransform(m.train_targets)[0]
-                            for m in model.models]
-            bss = torch.sqrt(bss_x * bss_y)
+#         if len(self.output_names_ordered) == 1:
+#             bss = model.models[0].outcome_transform.untransform(model.models[0].train_targets)[0]
+#         if len(self.output_names_ordered) == 2:
+#             bss_x, bss_y = [m.outcome_transform.untransform(m.train_targets)[0]
+#                             for m in model.models]
+#             bss = torch.sqrt(bss_x * bss_y)
             
-        x_smallest_observed_beamsize = model.models[0]._original_train_inputs[torch.argmin(bss)].reshape(1,-1)
+#         x_smallest_observed_beamsize = model.models[0]._original_train_inputs[torch.argmin(bss)].reshape(1,-1)
 
-        tuning_dims = list(range(bounds.shape[1]))
-        tuning_dims.remove(self.meas_dim)
-        tuning_dims = torch.tensor(tuning_dims)
-        x_tuning_best = torch.index_select(x_smallest_observed_beamsize, dim=1, index=tuning_dims)
-        x_tuning_init = x_tuning_best.repeat(self.n_samples,1).flatten()
-#         print(x_tuning_init)
+#         tuning_dims = list(range(bounds.shape[1]))
+#         tuning_dims.remove(self.meas_dim)
+#         tuning_dims = torch.tensor(tuning_dims)
+#         x_tuning_best = torch.index_select(x_smallest_observed_beamsize, dim=1, index=tuning_dims)
+#         x_tuning_init = x_tuning_best.repeat(self.n_samples,1).flatten()
+# #         print(x_tuning_init)
         ##############
 
         # minimize
@@ -192,7 +193,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
             self.n_samples, 1, -1
         )  # each row represents its respective sample's optimal tuning config
 
-        emit_target_best, is_valid = self.draw_posterior_emittance_samples(sample_funcs_list, 
+        emit_target_best, is_valid = self.evaluate_posterior_emittance_samples(sample_funcs_list, 
                                                                  x_tuning_best, 
                                                                  bounds, 
                                                                  tkwargs=cpu_tkwargs,
@@ -284,7 +285,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         
         x_tuning = x_tuning_flat.double().reshape(self.n_samples, 1, -1)
 
-        sample_emittance = self.draw_posterior_emittance_samples(sample_funcs_list, 
+        sample_emittance = self.evaluate_posterior_emittance_samples(sample_funcs_list, 
                                                                  x_tuning, 
                                                                  bounds, 
                                                                  tkwargs,
@@ -294,7 +295,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
 
         return sample_targets_sum
 
-    def draw_posterior_emittance_samples(self, model, x_tuning, bounds, tkwargs:dict=None, n_samples=10000, transform_target=False):
+    def evaluate_posterior_emittance_samples(self, model, x_tuning, bounds, tkwargs:dict=None, n_samples=10000, transform_target=False):
         # x_tuning must be shape n_tuning_configs x n_tuning_dims
         tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
         x = self.get_meas_scan_inputs(x_tuning, bounds, tkwargs) # result shape n_tuning_configs*n_steps x ndim
@@ -371,6 +372,8 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         
         return res, is_valid, validity_rate
 
+
+# -
 
 class ScipyBeamAlignment(Algorithm, ABC):
     name = "ScipyBeamAlignment"

@@ -454,7 +454,7 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
         X_tuning_scan[:,i] = ls
         X_tuning_scan = X_tuning_scan.repeat(optimizer.generator.algorithm.n_samples, 1, 1)
         sample_funcs_list = optimizer.generator.algorithm_results['sample_funcs_list']
-        emit, is_valid, validity_rate = optimizer.generator.algorithm.draw_posterior_emittance_samples(sample_funcs_list, 
+        emit, is_valid, validity_rate = optimizer.generator.algorithm.evaluate_posterior_emittance_samples(sample_funcs_list, 
                                                                                      X_tuning_scan, 
                                                                                      optimizer.vocs.bounds,
                                                                                      transform_target=True,
@@ -510,7 +510,7 @@ def plot_virtual_emittance_vs_tuning(optimizer, x_origin, ci=0.95, tkwargs:dict=
         x_scan = torch.linspace(*tuning_domain[i], 100, **tkwargs)
         x_tuning = x_origin.repeat(100, 1)
         x_tuning[:,i] = x_scan
-        emit, is_valid, validity_rate = algorithm.draw_posterior_emittance_samples(bax_model, 
+        emit, is_valid, validity_rate = algorithm.evaluate_posterior_emittance_samples(bax_model, 
                                                                                    x_tuning, 
                                                                                    bounds,
                                                                                    tkwargs,
@@ -681,7 +681,10 @@ def plot_virtual_measurement_scan(optimizer, x_tuning, tkwargs=None):
     bax_model_ids = [optimizer.generator.vocs.output_names.index(name)
                             for name in optimizer.generator.algorithm.model_names_ordered]
     bax_model = model.subset_output(bax_model_ids)
-    labels = ['$\sigma_{x,rms}^2$', '$\sigma_{y,rms}^2$']
+    if len(bax_model_ids)==2:
+        labels = ['$\sigma_{x,rms}^2$', '$\sigma_{y,rms}^2$']
+    else:
+        labels = ['$\sigma_{rms}^2$']
     
     for bss_model, label in zip(bax_model.models, labels):
         bss_posterior = bss_model.posterior(x_meas_scan)

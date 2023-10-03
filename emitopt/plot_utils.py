@@ -665,13 +665,16 @@ def plot_acq_func_opt_results(optimizer):
     plt.show()
 
 
-# +
+# -
 
-def plot_beam_size_squared_at_x_tuning(optimizer, x_tuning):
+#TO-DO: Need to handle case for just x or y
+def plot_virtual_measurement_scan(optimizer, x_tuning, tkwargs=None):
     meas_dim = optimizer.generator.algorithm.meas_dim
-    n_steps_exe_paths = optimizer.generator.algorithm.n_steps_exe_paths
-    x_meas = torch.linspace(*optimizer.vocs.bounds.T[meas_dim], n_steps_exe_paths)
-    x_meas_scan = get_meas_scan_inputs_from_tuning_configs(meas_dim=meas_dim, x_tuning=x_tuning, x_meas=x_meas)
+    n_steps_measurement_param = optimizer.generator.algorithm.n_steps_measurement_param
+    x_meas = torch.linspace(*optimizer.vocs.bounds.T[meas_dim], n_steps_measurement_param)
+    x_meas_scan = optimizer.generator.algorithm.get_meas_scan_inputs(x_tuning=x_tuning, 
+                                                                     bounds=optimizer.generator._get_optimization_bounds(), 
+                                                                     tkwargs=tkwargs)
 
     # get the beam size squared models in x and y
     model = optimizer.generator.train_model()

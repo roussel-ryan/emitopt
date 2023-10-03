@@ -488,10 +488,16 @@ def plot_virtual_emittance_vs_tuning(optimizer, x_tuned, ci=0.95):
                             for name in optimizer.generator.algorithm.model_names_ordered]
     bax_model = model.subset_output(bax_model_ids)
     meas_dim = optimizer.generator.algorithm.meas_dim
+    
     bounds = optimizer.generator._get_optimization_bounds()
     tuning_domain = torch.cat((bounds.T[: meas_dim], bounds.T[meas_dim + 1:]))
+    
+    tuning_param_names = optimizer.vocs.variable_names
+    del tuning_param_names[meas_dim]
+    
     n_tuning_dims = x_tuned.shape[1]
-    fig, axs = plt.subplots(2, n_tuning_dims)
+    
+    fig, axs = plt.subplots(2, n_tuning_dims, sharex='col')
     fig.set_size_inches(3*n_tuning_dims, 6)
         
     for i in range(tuning_domain.shape[0]):
@@ -517,12 +523,23 @@ def plot_virtual_emittance_vs_tuning(optimizer, x_tuned, ci=0.95):
         ax.plot(x_scan, quants[:,1])
         ax.axvline(x_tuned[0,i], c='r')
         
+        ax.set_xlabel(tuning_param_names[i])
+        if i==0:
+            ax.legend()
+            ax.set_ylabel('Emittance')
+            
         if n_tuning_dims==1:
             ax = axs[1]
         else:
             ax = axs[1,i]
         ax.plot(x_scan, validity_rate, c='m')
+        ax.axvline(x_tuned[0,i], c='r')
 
+        ax.set_xlabel(tuning_param_names[i])
+        if i==0:
+            ax.legend()
+            ax.set_ylabel('Sample Validity Rate')
+            
     return fig, axs
 
 

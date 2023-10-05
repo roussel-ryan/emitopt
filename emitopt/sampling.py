@@ -71,7 +71,7 @@ def draw_product_kernel_prior_paths(model, n_samples):
     )
 
     matern_prior_paths = draw_kernel_feature_paths(
-        model=matern_model, sample_shape=torch.Size([n_samples])
+        model=matern_model, sample_shape=torch.Size([n_samples]), num_features=2048
     )
 
     quad_kernel = copy.deepcopy(model.covar_module.base_kernel.kernels[1])
@@ -251,8 +251,8 @@ def compare_sampling_methods(
             print("batch", i)
 
         # pathwise sampling
-        #         post_paths = draw_product_kernel_post_paths(
-        post_paths = draw_linear_product_kernel_post_paths(
+        post_paths = draw_product_kernel_post_paths(
+#         post_paths = draw_linear_product_kernel_post_paths(
             model, n_samples=n_samples_per_batch
         )
 

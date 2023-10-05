@@ -154,38 +154,6 @@ def plot_sample_optima_convergence_emits(results):
     return fig, ax
 
 
-def plot_valid_emit_prediction_at_x_tuning(model, 
-                                           x_tuning, 
-                                           scale_factor, 
-                                           q_len, 
-                                           distance, 
-                                           bounds, 
-                                           meas_dim, 
-                                           n_samples, 
-                                           n_steps_quad_scan):
-    (
-    emits_at_target_valid,
-    sample_validity_rate,
-    ) = get_valid_emittance_samples(
-            model,
-            scale_factor,
-            q_len,
-            distance,
-            x_tuning,
-            bounds.T,
-            meas_dim,
-            n_samples=n_samples,
-            n_steps_quad_scan=n_steps_quad_scan,
-        )
-    
-    plt.hist(emits_at_target_valid.flatten().cpu(), density=True)
-    plt.xlabel('Predicted Optimal Emittance')
-    plt.ylabel('Probability Density')
-    plt.tight_layout()
-    plt.show()
-    print('sample validity rate:', sample_validity_rate)
-
-
 def plot_model_cross_section(model, vocs, scan_dict, nx=50, ny=50):
     scan_var_model_ids = {}
     scan_inputs_template = []
@@ -432,14 +400,14 @@ def plot_pathwise_surface_samples_2d(optimizer): # paper figure
         plt.show()
 
 
-# +
-def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_truth_emittance_fn=None):
-    #select sample result
-    X_tuned = optimizer.generator.algorithm_results['x_tuning_best'][sid:sid+1, 0, :]
-    print('X_tuned =', X_tuned)
+def plot_pathwise_emittance_vs_tuning(optimizer, x_origin, sample_ids=None, tkwargs:dict=None, transform_target=False):
+    tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
     
-    n_tuning_dims = X_tuned.shape[1]
-    fig, axs = plt.subplots(1, n_tuning_dims)
+    if sample_ids is None:
+        sample_ids = list(range(optimizer.generator.algorithm.n_samples))
+        
+    n_tuning_dims = x_origin.shape[1]
+    fig, axs = plt.subplots(1, n_tuning_dims, sharey='row')
     if n_tuning_dims == 1: axs = [axs]
 
     fig.set_size_inches(3*(n_tuning_dims), 3)
@@ -449,7 +417,7 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
     tuning_dims.remove(meas_dim)
     for i, scan_dim in enumerate(tuning_dims):
                     
-        X_tuning_scan = X_tuned.repeat(100,1)
+        X_tuning_scan = x_origin.repeat(100,1)
         ls = torch.linspace(*optimizer.vocs.bounds.T[scan_dim],100)
         X_tuning_scan[:,i] = ls
         X_tuning_scan = X_tuning_scan.repeat(optimizer.generator.algorithm.n_samples, 1, 1)
@@ -457,30 +425,27 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
         emit, is_valid, validity_rate = optimizer.generator.algorithm.evaluate_posterior_emittance_samples(sample_funcs_list, 
                                                                                      X_tuning_scan, 
                                                                                      optimizer.vocs.bounds,
-                                                                                     transform_target=True,
+                                                                                     transform_target=transform_target,
                                                                                     )
 
         ax = axs[i]
-
-#         if ground_truth_emittance_fn is not None:
-#             emit_min = torch.sqrt(6.29e-09 * 1.28e-08)*1.e6
-#             gt_emits, gt_emit_xy = ground_truth_emittance_fn(emit_min=emit_min, x_tuning=X_tuning_scan)
-#             ax.plot(ls, gt_emits, c='k', label='ground truth')
-        ax.plot(ls.cpu(), emit[sid].detach().cpu(), label='Sample ' + str(sid))
-        ax.axvline(X_tuned[0,i].cpu(), c='r', label='Sample optimization result')
-        ax.axhline(0, c='k', ls='--', label='physical cutoff')
-
+        
+        for j in sample_ids:
+            sample_label = 'Samples' if j==0 else None
+            cutoff_label = 'Physical limit' if j==0 else None
+            ax.plot(ls.cpu(), emit[j].detach().cpu(), label=sample_label, c='C0', alpha=0.5)
+            
+        ax.axhline(0, c='k', ls='--', label=cutoff_label)
+        ax.axvline(x_origin[0,i], c='r', label='Scan origin')
         ax.set_xlabel('tuning param ' + str(i))
 
         if i == 0:
-            ax.set_ylabel('$\sqrt{\epsilon_x\epsilon_y}$')
+            ax.set_ylabel('$\epsilon}$')
             ax.legend()
 
     plt.tight_layout()
     return fig, axs
 
-
-# -
 
 def plot_virtual_emittance_vs_tuning(optimizer, x_origin, ci=0.95, tkwargs:dict=None, n_samples=10000):
     tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
@@ -502,10 +467,10 @@ def plot_virtual_emittance_vs_tuning(optimizer, x_origin, ci=0.95, tkwargs:dict=
     
     n_tuning_dims = x_origin.shape[1]
     
-    fig, axs = plt.subplots(2, n_tuning_dims, sharex='col')
+    fig, axs = plt.subplots(2, n_tuning_dims, sharex='col', sharey='row')
     fig.set_size_inches(3*n_tuning_dims, 6)
         
-    for i in range(tuning_domain.shape[0]):
+    for i in range(n_tuning_dims):
         # do a scan of the posterior emittance (via valid sampling)
         x_scan = torch.linspace(*tuning_domain[i], 100, **tkwargs)
         x_tuning = x_origin.repeat(100, 1)
@@ -514,7 +479,8 @@ def plot_virtual_emittance_vs_tuning(optimizer, x_origin, ci=0.95, tkwargs:dict=
                                                                                    x_tuning, 
                                                                                    bounds,
                                                                                    tkwargs,
-                                                                                   n_samples)
+                                                                                   n_samples,
+                                                                                   transform_target=False)
         quants = torch.tensor([])
         
         for j in range(len(x_scan)):
@@ -546,6 +512,7 @@ def plot_virtual_emittance_vs_tuning(optimizer, x_origin, ci=0.95, tkwargs:dict=
             ax = axs[1,i]
         ax.plot(x_scan, validity_rate, c='m')
         ax.axvline(x_origin[0,i], c='r')
+        ax.set_ylim(0,1)
 
         ax.set_xlabel(tuning_param_names[i])
         if i==0:
@@ -667,8 +634,9 @@ def plot_acq_func_opt_results(optimizer):
 
 # -
 
-#TO-DO: Need to handle case for just x or y
+#TO-DO: Need to handle case for just x or y, CHECK x_meas/k_meas units
 def plot_virtual_measurement_scan(optimizer, x_tuning, tkwargs=None):
+    assert x_tuning.shape[0]==1
     meas_dim = optimizer.generator.algorithm.meas_dim
     n_steps_measurement_param = optimizer.generator.algorithm.n_steps_measurement_param
     x_meas = torch.linspace(*optimizer.vocs.bounds.T[meas_dim], n_steps_measurement_param)
@@ -681,6 +649,7 @@ def plot_virtual_measurement_scan(optimizer, x_tuning, tkwargs=None):
     bax_model_ids = [optimizer.generator.vocs.output_names.index(name)
                             for name in optimizer.generator.algorithm.model_names_ordered]
     bax_model = model.subset_output(bax_model_ids)
+    
     if len(bax_model_ids)==2:
         labels = ['$\sigma_{x,rms}^2$', '$\sigma_{y,rms}^2$']
     else:
@@ -694,7 +663,8 @@ def plot_virtual_measurement_scan(optimizer, x_tuning, tkwargs=None):
         plt.fill_between(x_meas, (bss_mean-2*bss_var.sqrt()), (bss_mean+2*bss_var.sqrt()), alpha=0.3)
     
     plt.title('Mean-Square Beam Size GP Model Output')
-    plt.xlabel('Measurement Quad Focusing Strength ($[k]=m^{-2}$)')
+#     plt.xlabel('Measurement Quad Focusing Strength ($[k]=m^{-2}$)')
+    plt.xlabel('Measurement Quad Setting (Machine Units)')
     plt.ylabel('Mean-Square Beam Size (mm)')
     plt.legend()
     print("x_tuning:", x_tuning)

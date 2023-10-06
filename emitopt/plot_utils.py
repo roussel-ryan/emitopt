@@ -1,18 +1,113 @@
+# +
 import torch
 from matplotlib import pyplot as plt
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+import matplotlib.patches as mpatches
 
+# from emitopt.beam_dynamics import build_quad_rmat, propagate_sig
+
+# +
+# def plot_valid_thick_quad_fits(k, y, q_len, rmat_quad_to_screen, emit, bmag, sig, ci=0.95, tkwargs=None, k_virtual=None, bss_virtual=None):
+#     """
+#     A function to plot the physically valid fit results
+#     produced by get_valid_emit_bmag_samples_from_quad_scan().
+
+#     Parameters:
+
+#         k: 1d numpy array of shape (n_steps_quad_scan,)
+#         representing the measurement quad geometric focusing strengths in [m^-2]
+#         used in the emittance scan
+
+#         y: 1d numpy array of shape (n_steps_quad_scan, )
+#             representing the root-mean-square beam size measurements in [m] of an emittance scan
+#             with inputs given by k
+
+#         sig: tensor, shape (n_scans x 3 x 1), containing the computed sig11, sig12, sig22
+#                 corresponding to each measurement scan
+                
+#         emit: shape (n_scans x 1) containing the geometric emittance fit results for each scan
+
+#         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
+
+#         distance: the longitudinal distance (drift length) in [m] from the measurement
+#                     quadrupole to the observation screen
+        
+#         (NOT IN USE)
+#         rmat_quad_to_screen: the (fixed) 2x2 R matrix describing the transport from the end of the 
+#                 measurement quad to the observation screen.
+                
+#         ci: "Confidence interval" for plotting upper/lower quantiles.
+
+#         tkwargs: dict containing the tensor device and dtype
+#     """
+
+#     if tkwargs is None:
+#         tkwargs = {"dtype": torch.double, "device": "cpu"}
+
+#     k_fit = torch.linspace(k.min(), k.max(), 10, **tkwargs)
+#     quad_rmats = build_quad_rmat(k_fit, q_len) # result shape (len(k_fit) x 2 x 2)
+#     total_rmats = rmat_quad_to_screen.reshape(1,2,2) @ quad_rmats # result shape (len(k_fit) x 2 x 2)
+#     sig_final = propagate_sig(sig, emit, total_rmats)[0] # result shape len(sig) x len(k_fit) x 3 x 1
+#     bss_fit = sig_final[:,:,0,0]
+
+#     upper_quant = torch.quantile(bss_fit.sqrt(), q=0.5 + ci / 2.0, dim=0)
+#     lower_quant = torch.quantile(bss_fit.sqrt(), q=0.5 - ci / 2.0, dim=0)
+    
+#     fig, axs = plt.subplots(3)
+#     fig.set_size_inches(5,9)
+    
+#     ax=axs[0]
+#     fit = ax.fill_between(
+#         k_fit.detach().numpy(),
+#         lower_quant*1.e6,
+#         upper_quant*1.e6,
+#         alpha=0.3,
+#         label='"Bayesian" Thick-Quad Fits',
+#         zorder=1,
+#     )
+    
+#     bss_upper = torch.quantile(bss_virtual, q=0.5 + ci / 2.0, dim=0).sqrt()
+#     bss_lower = torch.quantile(bss_virtual, q=0.5 - ci / 2.0, dim=0).sqrt()
+#     virtual_meas = ax.scatter(k_virtual.repeat(bss_virtual.shape[0],1).detach(),
+#                                         bss_virtual.sqrt()*1.e6,
+#                                         alpha=0.3,
+#                                         color='r',
+#                                         label='Virtual Measurements',
+#                                         zorder=0) 
+    
+#     obs = ax.scatter(
+#         k, y*1.e6, marker="x", s=120, c="orange", label="Measurements", zorder=2
+#     )
+#     ax.set_title("Beam Size at Screen")
+#     ax.set_xlabel(r"Measurement Quad Geometric Focusing Strength ($[k]=m^{-2}$)")
+#     ax.set_ylabel(r"r.m.s. Beam Size")# ($[\sigma]=\mu m$)")
+#     ax.legend(handles=[obs, fit, virtual_meas])
+    
+#     ax=axs[1]
+#     ax.hist(emit.flatten(), density=True)
+#     ax.set_title('Geometric Emittance Distribution')
+#     ax.set_xlabel(r'Geometric Emittance')# ($[\epsilon]=m*rad$)')
+#     ax.set_ylabel('Probability Density')
+    
+#     ax=axs[2]
+#     ax.hist(bmag.flatten(), range=(1,5), bins=20, density=True)
+#     ax.set_title(r'$\beta_{mag}$ Distribution')
+#     ax.set_xlabel(r'$\beta_{mag}$ at Screen')
+#     ax.set_ylabel('Probability Density')
+    
+#     plt.tight_layout()
+# -
 
 def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, show_valid_only=True):
-    ndim = results[1]["x_stars_all"].shape[1]
+    ndim = results[1]["x_tuning_best"].shape[-1]
     niter = max(results.keys())
-    nsamples = results[1]["x_stars_all"].shape[0]
+    nsamples = results[1]["x_tuning_best"].shape[0]
 
     if tuning_parameter_names is None:
         tuning_parameter_names = ['tp_' + str(i) for i in range(ndim)]
-
-    from matplotlib import pyplot as plt
     
     fig, axs = plt.subplots(ndim, 1)
+    fig.set_size_inches(8,3*ndim)
 
     for i in range(ndim):
 
@@ -29,68 +124,34 @@ def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, 
             
         for key in results.keys():
             if show_valid_only:
-                is_valid = results[key]["is_valid"]
-                cut_ids = torch.tensor(range(nsamples))[is_valid]
+                ax.scatter(torch.tensor([key]).repeat(len(results[key]["x_tuning_best_retained"][...,i])), 
+                           results[key]["x_tuning_best_retained"][...,i].flatten(),
+                           c='C0')
             else:
-                cut_ids = torch.tensor(range(nsamples))
-            ax.scatter(torch.tensor([key]).repeat(len(cut_ids)), 
-                       torch.index_select(results[key]["x_stars_all"], dim=0, index=cut_ids)[:,i],
-                       c='C0')
+                ax.scatter(torch.tensor([key]).repeat(len(results[key]["x_tuning_best"][...,i])), 
+                           results[key]["x_tuning_best"][...,i].flatten(),
+                           c='C0')
     plt.tight_layout()
+    
+    return fig, axs
 
 
 def plot_sample_optima_convergence_emits(results):
     niter = max(results.keys())
-    nsamples = results[1]["emit_stars_all"].shape[0]
+    nsamples = results[1]["emit_best"].shape[0]
     
-    from matplotlib import pyplot as plt
-
     fig, ax = plt.subplots(1)
 
     ax.set_ylabel("$\epsilon$")
     ax.set_xlabel("iteration")
     ax.set_title("Sample Optima Distribution: Emittance")
     for key in results.keys():
-        is_valid = results[key]["is_valid"]
-        valid_ids = torch.tensor(range(nsamples))[is_valid]
-        ax.scatter(torch.tensor([key]).repeat(torch.sum(is_valid)), 
-                   torch.index_select(results[key]["emit_stars_all"], dim=0, index=valid_ids)[:,0].detach(), 
+        ax.scatter(torch.tensor([key]).repeat(len(results[key]["emit_best"].flatten())), 
+                   results[key]["emit_best"].flatten().detach(), 
                    c='C0')
     plt.tight_layout()
-
-
-def plot_valid_emit_prediction_at_x_tuning(model, 
-                                           x_tuning, 
-                                           scale_factor, 
-                                           q_len, 
-                                           distance, 
-                                           bounds, 
-                                           meas_dim, 
-                                           n_samples, 
-                                           n_steps_quad_scan):
-    (
-    emits_at_target_valid,
-    sample_validity_rate,
-    ) = get_valid_emittance_samples(
-            model,
-            scale_factor,
-            q_len,
-            distance,
-            x_tuning,
-            bounds.T,
-            meas_dim,
-            n_samples=n_samples,
-            n_steps_quad_scan=n_steps_quad_scan,
-        )
     
-    from matplotlib import pyplot as plt
-
-    plt.hist(emits_at_target_valid.flatten().cpu(), density=True)
-    plt.xlabel('Predicted Optimal Emittance')
-    plt.ylabel('Probability Density')
-    plt.tight_layout()
-    plt.show()
-    print('sample validity rate:', sample_validity_rate)
+    return fig, ax
 
 
 def plot_model_cross_section(model, vocs, scan_dict, nx=50, ny=50):
@@ -134,8 +195,6 @@ def plot_model_cross_section(model, vocs, scan_dict, nx=50, ny=50):
     mean = mean.reshape(ny, nx)
     var = var.reshape(ny, nx)
     
-    from matplotlib import pyplot as plt
-
     fig, axs = plt.subplots(2)
 
     ax = axs[0]
@@ -173,7 +232,7 @@ def plot_pathwise_surface_samples_2d(optimizer): # paper figure
             X, Y = torch.meshgrid(xlin, ylin)
             XY = torch.cat((X.reshape(-1,1), Y.reshape(-1,1)), dim=1)
             print(XY.shape)
-            Z = optimizer.generator.algorithm_results['post_paths_cpu'](XY)[s].reshape(X.shape).detach()
+            Z = optimizer.generator.algorithm_results['sample_funcs_list'][0](XY)[s].reshape(X.shape).detach()
             cmap='viridis'
             surf = ax.plot_surface(Y, X, Z, cmap=cmap,
                                    linewidth=0, antialiased=True, alpha=0.3, rasterized=True)
@@ -260,9 +319,6 @@ def plot_pathwise_surface_samples_2d(optimizer): # paper figure
             x_stars_all = torch.cat((x_stars_all, x_stars), dim=0)
             emit_stars_all = torch.cat((emit_stars_all, emit_stars), dim=0)
 
-        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-        import matplotlib.patches as mpatches
-
         ax = axs[1]
 
         # plot median emittance curve
@@ -344,15 +400,14 @@ def plot_pathwise_surface_samples_2d(optimizer): # paper figure
         plt.show()
 
 
-def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_truth_emittance_fn=None):
-    #select sample result
-    X_tuned = optimizer.generator.algorithm_results['x_stars'][sid:sid+1, :]
-    print('X_tuned =', X_tuned)
+def plot_pathwise_emittance_vs_tuning(optimizer, x_origin, sample_ids=None, tkwargs:dict=None, transform_target=False):
+    tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
     
-    from emitopt.utils import post_path_emit_squared_thick_quad
-
-    n_tuning_dims = X_tuned.shape[1]
-    fig, axs = plt.subplots(1, n_tuning_dims)
+    if sample_ids is None:
+        sample_ids = list(range(optimizer.generator.algorithm.n_samples))
+        
+    n_tuning_dims = x_origin.shape[1]
+    fig, axs = plt.subplots(1, n_tuning_dims, sharey='row')
     if n_tuning_dims == 1: axs = [axs]
 
     fig.set_size_inches(3*(n_tuning_dims), 3)
@@ -360,43 +415,113 @@ def plot_pathwise_sample_emittance_minimization_results(optimizer, sid, ground_t
     meas_dim = optimizer.generator.algorithm.meas_dim
     tuning_dims = list(range(n_tuning_dims + 1))
     tuning_dims.remove(meas_dim)
-    for scan_dim in tuning_dims:
+    for i, scan_dim in enumerate(tuning_dims):
                     
-        X_tuning_scan = X_tuned.repeat(100,1)
+        X_tuning_scan = x_origin.repeat(100,1)
         ls = torch.linspace(*optimizer.vocs.bounds.T[scan_dim],100)
-        X_tuning_scan[:,scan_dim] = ls
-        X_meas = torch.linspace(*optimizer.vocs.bounds.T[meas_dim],11)
+        X_tuning_scan[:,i] = ls
+        X_tuning_scan = X_tuning_scan.repeat(optimizer.generator.algorithm.n_samples, 1, 1)
+        sample_funcs_list = optimizer.generator.algorithm_results['sample_funcs_list']
+        emit, is_valid, validity_rate = optimizer.generator.algorithm.evaluate_posterior_emittance_samples(sample_funcs_list, 
+                                                                                     X_tuning_scan, 
+                                                                                     optimizer.vocs.bounds,
+                                                                                     transform_target=transform_target,
+                                                                                    )
 
-        emit_sq_xy = []
-        for post_paths, sign in zip(optimizer.generator.algorithm_results['post_paths_cpu_xy'], [1, -1]):
-            emit_sq = post_path_emit_squared_thick_quad(post_paths, 
-                                      sign*optimizer.generator.algorithm.scale_factor, 
-                                      optimizer.generator.algorithm.q_len, 
-                                      optimizer.generator.algorithm.distance, 
-                                      X_tuning_scan.cpu(), meas_dim, X_meas.cpu(), samplewise=False)[0]
-            emit_sq_xy += [emit_sq]
-        geo_mean_emit = torch.sqrt(emit_sq_xy[0].abs().sqrt() * emit_sq_xy[1].abs().sqrt())
+        ax = axs[i]
+        
+        for j in sample_ids:
+            sample_label = 'Samples' if j==0 else None
+            cutoff_label = 'Physical limit' if j==0 else None
+            ax.plot(ls.cpu(), emit[j].detach().cpu(), label=sample_label, c='C0', alpha=0.5)
+            
+        ax.axhline(0, c='k', ls='--', label=cutoff_label)
+        ax.axvline(x_origin[0,i], c='r', label='Scan origin')
+        ax.set_xlabel('tuning param ' + str(i))
 
-        ax = axs[scan_dim]
-
-        if ground_truth_emittance_fn is not None:
-            gt_emits, gt_emit_xy = ground_truth_emittance_fn(x_tuning=X_tuning_scan)
-            ax.plot(ls, gt_emits, c='k', label='ground truth')
-        ax.plot(ls.cpu(), geo_mean_emit[sid].detach().cpu()*1.e-6, label='Sample ' + str(sid))
-        ax.axvline(X_tuned[0,scan_dim].cpu(), c='r', label='Sample optimization result')
-        ax.axhline(0, c='k', ls='--', label='physical cutoff')
-
-        ax.set_xlabel('tuning param ' + str(scan_dim))
-
-        if scan_dim == 0:
-            ax.set_ylabel('$\sqrt{\epsilon_x\epsilon_y}$')
+        if i == 0:
+            ax.set_ylabel('$\epsilon}$')
             ax.legend()
 
     plt.tight_layout()
-    plt.show()
+    return fig, axs
 
 
-from emitopt.utils import post_mean_emit_squared_thick_quad
+def plot_virtual_emittance_vs_tuning(optimizer, x_origin, ci=0.95, tkwargs:dict=None, n_samples=10000):
+    tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
+    
+    #extract GP models
+    model = optimizer.generator.train_model()
+    bax_model_ids = [optimizer.generator.vocs.output_names.index(name)
+                            for name in optimizer.generator.algorithm.model_names_ordered]
+    bax_model = model.subset_output(bax_model_ids)
+    meas_dim = optimizer.generator.algorithm.meas_dim
+    
+    bounds = optimizer.generator._get_optimization_bounds()
+    tuning_domain = torch.cat((bounds.T[: meas_dim], bounds.T[meas_dim + 1:]))
+    
+    tuning_param_names = optimizer.vocs.variable_names
+    del tuning_param_names[meas_dim]
+    
+    algorithm = optimizer.generator.algorithm
+    
+    n_tuning_dims = x_origin.shape[1]
+    
+    fig, axs = plt.subplots(2, n_tuning_dims, sharex='col', sharey='row')
+    fig.set_size_inches(3*n_tuning_dims, 6)
+        
+    for i in range(n_tuning_dims):
+        # do a scan of the posterior emittance (via valid sampling)
+        x_scan = torch.linspace(*tuning_domain[i], 100, **tkwargs)
+        x_tuning = x_origin.repeat(100, 1)
+        x_tuning[:,i] = x_scan
+        emit, is_valid, validity_rate = algorithm.evaluate_posterior_emittance_samples(bax_model, 
+                                                                                   x_tuning, 
+                                                                                   bounds,
+                                                                                   tkwargs,
+                                                                                   n_samples,
+                                                                                   transform_target=False)
+        quants = torch.tensor([])
+        
+        for j in range(len(x_scan)):
+            cut_ids = torch.tensor(range(len(emit[:,j])), device=tkwargs['device'])[is_valid[:,j]]
+            emit_valid = torch.index_select(emit[:,j], dim=0, index=cut_ids)
+            q = torch.tensor([(1.-ci)/2., 0.5, (1.+ci)/2.], **tkwargs)
+            if len(cut_ids)>=10:
+                quant = torch.quantile(emit_valid, q=q, dim=0).reshape(1,-1)
+            else:
+                quant = torch.tensor([[float('nan'), float('nan'), float('nan')]], **tkwargs)
+            quants = torch.cat((quants, quant))
+
+        if n_tuning_dims==1:
+            ax = axs[0]
+        else:
+            ax = axs[0,i]
+        ax.fill_between(x_scan, quants[:,0], quants[:,2], alpha=0.3)
+        ax.plot(x_scan, quants[:,1])
+        ax.axvline(x_origin[0,i], c='r')
+        
+        ax.set_xlabel(tuning_param_names[i])
+        if i==0:
+            ax.legend()
+            ax.set_ylabel('Emittance')
+            
+        if n_tuning_dims==1:
+            ax = axs[1]
+        else:
+            ax = axs[1,i]
+        ax.plot(x_scan, validity_rate, c='m')
+        ax.axvline(x_origin[0,i], c='r')
+        ax.set_ylim(0,1)
+
+        ax.set_xlabel(tuning_param_names[i])
+        if i==0:
+            ax.legend()
+            ax.set_ylabel('Sample Validity Rate')
+            
+    return fig, axs
+
+
 def plot_posterior_mean_modeled_emittance(optimizer, x_tuning, ground_truth_emittance_fn=None):
     
     
@@ -415,10 +540,10 @@ def plot_posterior_mean_modeled_emittance(optimizer, x_tuning, ground_truth_emit
     meas_dim = optimizer.generator.algorithm.meas_dim
     tuning_dims = list(range(n_tuning_dims + 1))
     tuning_dims.remove(meas_dim)
-    for scan_dim in tuning_dims:
+    for i, scan_dim in enumerate(tuning_dims):
         X_tuning_scan = x_tuning.repeat(100,1)
         ls = torch.linspace(*optimizer.vocs.bounds.T[scan_dim],100)
-        X_tuning_scan[:,scan_dim] = ls
+        X_tuning_scan[:,i] = ls
         X_meas = torch.linspace(*optimizer.vocs.bounds.T[meas_dim],11)
 
         
@@ -436,7 +561,7 @@ def plot_posterior_mean_modeled_emittance(optimizer, x_tuning, ground_truth_emit
             emit_sq_xy += [emit_sq]
             
         geo_mean_emit = torch.sqrt(emit_sq_xy[0].abs().sqrt() * emit_sq_xy[1].abs().sqrt())
-        ax = axs[scan_dim]
+        ax = axs[i]
 
         if ground_truth_emittance_fn is not None:
             gt_emits, gt_emit_xy = ground_truth_emittance_fn(x_tuning=X_tuning_scan)
@@ -445,9 +570,9 @@ def plot_posterior_mean_modeled_emittance(optimizer, x_tuning, ground_truth_emit
         ax.plot(ls.cpu(), geo_mean_emit.detach().cpu()*1.e-6, label='GP mean')
         ax.axhline(0, c='k', ls='--', label='physical cutoff')
 
-        ax.set_xlabel('tuning param ' + str(scan_dim))
+        ax.set_xlabel('tuning param ' + str(i))
 
-        if scan_dim == 0:
+        if i == 0:
             ax.set_ylabel('$\sqrt{\epsilon_x\epsilon_y}$')
             ax.legend()
 
@@ -506,21 +631,29 @@ def plot_acq_func_opt_results(optimizer):
     plt.tight_layout()
     plt.show()
 
-# +
-from emitopt.utils import get_meas_scan_inputs_from_tuning_configs
 
-def plot_beam_size_squared_at_x_tuning(optimizer, x_tuning):
+# -
+
+#TO-DO: Need to handle case for just x or y, CHECK x_meas/k_meas units
+def plot_virtual_measurement_scan(optimizer, x_tuning, tkwargs=None):
+    assert x_tuning.shape[0]==1
     meas_dim = optimizer.generator.algorithm.meas_dim
-    n_steps_exe_paths = optimizer.generator.algorithm.n_steps_exe_paths
-    x_meas = torch.linspace(*optimizer.vocs.bounds.T[meas_dim], n_steps_exe_paths)
-    x_meas_scan = get_meas_scan_inputs_from_tuning_configs(meas_dim=meas_dim, x_tuning=x_tuning, x_meas=x_meas)
+    n_steps_measurement_param = optimizer.generator.algorithm.n_steps_measurement_param
+    x_meas = torch.linspace(*optimizer.vocs.bounds.T[meas_dim], n_steps_measurement_param)
+    x_meas_scan = optimizer.generator.algorithm.get_meas_scan_inputs(x_tuning=x_tuning, 
+                                                                     bounds=optimizer.generator._get_optimization_bounds(), 
+                                                                     tkwargs=tkwargs)
 
     # get the beam size squared models in x and y
     model = optimizer.generator.train_model()
     bax_model_ids = [optimizer.generator.vocs.output_names.index(name)
                             for name in optimizer.generator.algorithm.model_names_ordered]
     bax_model = model.subset_output(bax_model_ids)
-    labels = ['$\sigma_{x,rms}^2$', '$\sigma_{y,rms}^2$']
+    
+    if len(bax_model_ids)==2:
+        labels = ['$\sigma_{x,rms}^2$', '$\sigma_{y,rms}^2$']
+    else:
+        labels = ['$\sigma_{rms}^2$']
     
     for bss_model, label in zip(bax_model.models, labels):
         bss_posterior = bss_model.posterior(x_meas_scan)
@@ -530,7 +663,8 @@ def plot_beam_size_squared_at_x_tuning(optimizer, x_tuning):
         plt.fill_between(x_meas, (bss_mean-2*bss_var.sqrt()), (bss_mean+2*bss_var.sqrt()), alpha=0.3)
     
     plt.title('Mean-Square Beam Size GP Model Output')
-    plt.xlabel('Measurement Quad Focusing Strength ($[k]=m^{-2}$)')
+#     plt.xlabel('Measurement Quad Focusing Strength ($[k]=m^{-2}$)')
+    plt.xlabel('Measurement Quad Setting (Machine Units)')
     plt.ylabel('Mean-Square Beam Size (mm)')
     plt.legend()
     print("x_tuning:", x_tuning)

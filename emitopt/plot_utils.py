@@ -655,16 +655,19 @@ def plot_virtual_measurement_scan(optimizer, x_tuning, tkwargs=None):
     else:
         labels = ['$\sigma_{rms}^2$']
     
+    fig, ax = plt.subplots(1)
+    
     for bss_model, label in zip(bax_model.models, labels):
         bss_posterior = bss_model.posterior(x_meas_scan)
         bss_mean = bss_posterior.mean.flatten().detach()
         bss_var = bss_posterior.variance.flatten().detach()
-        plt.plot(x_meas, bss_mean.detach(), label=label)
-        plt.fill_between(x_meas, (bss_mean-2*bss_var.sqrt()), (bss_mean+2*bss_var.sqrt()), alpha=0.3)
+        ax.plot(x_meas, bss_mean.detach(), label=label)
+        ax.fill_between(x_meas, (bss_mean-2*bss_var.sqrt()), (bss_mean+2*bss_var.sqrt()), alpha=0.3)
     
-    plt.title('Mean-Square Beam Size GP Model Output')
+    ax.set_title('Mean-Square Beam Size GP Model Output')
 #     plt.xlabel('Measurement Quad Focusing Strength ($[k]=m^{-2}$)')
-    plt.xlabel('Measurement Quad Setting (Machine Units)')
-    plt.ylabel('Mean-Square Beam Size (mm)')
-    plt.legend()
-    print("x_tuning:", x_tuning)
+    ax.set_xlabel('Measurement Quad Setting (Machine Units)')
+    ax.set_ylabel('Mean-Square Beam Size (mm)')
+    ax.legend()
+    
+    return fig, ax

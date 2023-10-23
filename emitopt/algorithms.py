@@ -17,7 +17,7 @@ from botorch.models.model import Model, ModelList
 from botorch.sampling.pathwise.posterior_samplers import draw_matheron_paths
 from gpytorch.kernels import ProductKernel, MaternKernel
 
-from emitopt.beam_dynamics import compute_emit_bmag
+from emitopt.analysis import compute_emit_bmag
 
 
 def unif_random_sample_domain(n_samples, domain):

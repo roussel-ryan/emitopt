@@ -1,4 +1,4 @@
-def get_quad_scale_factor(E=0.135, q_len=0.108):
+def get_quad_scale_factor(E, q_len):
     """
     Computes multiplicative scale factor to convert from LCLS quad PV values (model input space)
     in [kG] to the geometric focusing strengths in [m^-2].

@@ -1,13 +1,11 @@
-# +
 import torch
 from matplotlib import pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import matplotlib.patches as mpatches
+from emitopt.beam_dynamics import build_quad_rmat, propagate_beam_quad_scan
 
-# from emitopt.beam_dynamics import build_quad_rmat, propagate_sig
 
-# +
-def plot_valid_thick_quad_fits(k, beamsize, q_len, rmat, emit, bmag, sig, ci=0.95, tkwargs=None, k_virtual=None, bss_virtual=None):
+def plot_valid_thick_quad_fits(k, beamsize, q_len, rmat, emit, bmag, sig, ci=0.95, tkwargs=None):
     """
     Plots the fit results produced by emitopt.analysis.compute_emit_bayesian().
 
@@ -45,32 +43,21 @@ def plot_valid_thick_quad_fits(k, beamsize, q_len, rmat, emit, bmag, sig, ci=0.9
     
     ax=axs[0]
     
-#     k_fit = torch.linspace(k.min(), k.max(), 10, **tkwargs)
-#     quad_rmats = build_quad_rmat(k_fit, q_len) # result shape (len(k_fit) x 2 x 2)
-#     total_rmats = rmat.reshape(1,2,2).double() @ quad_rmats.double() # result shape (len(k_fit) x 2 x 2)
-#     sig_final = propagate_beam_quad_scan(sig, emit, total_rmats)[0] # result shape len(sig) x len(k_fit) x 3 x 1
-#     bss_fit = sig_final[:,:,0,0]
+    k_fit = torch.linspace(k.min(), k.max(), 10, **tkwargs)
+    quad_rmats = build_quad_rmat(k_fit, q_len) # result shape (len(k_fit) x 2 x 2)
+    total_rmats = rmat.reshape(1,2,2).double() @ quad_rmats.double() # result shape (len(k_fit) x 2 x 2)
+    sig_final = propagate_beam_quad_scan(sig, emit, total_rmats)[0] # result shape len(sig) x len(k_fit) x 3 x 1
+    bss_fit = sig_final[:,:,0,0]
 
-#     upper_quant = torch.quantile(bss_fit.sqrt(), q=0.5 + ci / 2.0, dim=0)
-#     lower_quant = torch.quantile(bss_fit.sqrt(), q=0.5 - ci / 2.0, dim=0)
+    upper_quant = torch.quantile(bss_fit.sqrt(), q=0.5 + ci / 2.0, dim=0)
+    lower_quant = torch.quantile(bss_fit.sqrt(), q=0.5 - ci / 2.0, dim=0)
 
-#     fit = ax.fill_between(
-#         k_fit.detach().numpy(),
-#         lower_quant*1.e6,
-#         upper_quant*1.e6,
-#         alpha=0.3,
-#         label='"Bayesian" Thick-Quad Fits',
-#         zorder=1,
-#     )
-    
-    bss_upper = torch.quantile(bss_virtual, q=0.5 + ci / 2.0, dim=0).sqrt()
-    bss_lower = torch.quantile(bss_virtual, q=0.5 - ci / 2.0, dim=0).sqrt()
     fit = ax.fill_between(
-        k_virtual.detach().numpy(),
-        bss_lower*1.e6,
-        bss_upper*1.e6,
+        k_fit.detach().numpy(),
+        lower_quant*1.e6,
+        upper_quant*1.e6,
         alpha=0.3,
-        label='GP Fit',
+        label='Model Fit',
         zorder=1,
     )
     
@@ -96,8 +83,6 @@ def plot_valid_thick_quad_fits(k, beamsize, q_len, rmat, emit, bmag, sig, ci=0.9
     
     plt.tight_layout()
 
-
-# -
 
 def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, show_valid_only=True):
     ndim = results[1]["x_tuning_best"].shape[-1]

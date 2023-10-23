@@ -94,22 +94,20 @@ def compute_emit_bayesian(
 
     # filter on physical validity
     cut_ids = torch.tensor(range(emit.shape[0]))[is_valid]
-    emit_valid = torch.index_select(emit, dim=0, index=cut_ids)
-    bmag_valid = torch.index_select(bmag, dim=0, index=cut_ids)
-    sig_valid = torch.index_select(sig, dim=0, index=cut_ids)
+    emit = torch.index_select(emit, dim=0, index=cut_ids)
+    bmag = torch.index_select(bmag, dim=0, index=cut_ids)
+    sig = torch.index_select(sig, dim=0, index=cut_ids)
 
     if visualize:
-        plot_valid_thick_quad_fits(k=k, 
-                                   beamsize=beamsize, 
-                                   q_len=q_len, 
-                                   rmat=rmat,
-                                   emit=emit_valid, 
-                                   bmag=bmag_valid,
-                                   sig=sig_valid, 
-                                   k_virtual=k_virtual,
-                                   bss_virtual=bss_virtual,
+        plot_valid_thick_quad_fits(k, 
+                                   beamsize, 
+                                   q_len,
+                                   rmat,
+                                   emit,
+                                   bmag,
+                                   sig
                                   )
-    return emit_valid, bmag_valid, sig_valid, sample_validity_rate
+    return emit, bmag, sig, sample_validity_rate
 
 
 def compute_emit_bmag(k, beamsize_squared, q_len, rmat, beta0=1., alpha0=0., get_bmag=True, thick=True):

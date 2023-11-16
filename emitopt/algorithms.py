@@ -69,7 +69,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         # get observable model names in the order they appear in the model (ModelList)
         return [key for key in [self.x_key, self.y_key] if key]
 
-    def get_execution_paths(self, model: ModelList, bounds: Tensor, tkwargs=None, init='random', verbose=False):
+    def get_execution_paths(self, model: ModelList, bounds: Tensor, tkwargs=None, init='smallest', verbose=False):
         if not (self.x_key or self.y_key):
             raise ValueError("must provide a key for x, y, or both.")
         if (self.x_key and self.rmat_x is None) or (self.y_key and self.rmat_y is None):

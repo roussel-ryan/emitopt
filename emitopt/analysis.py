@@ -135,9 +135,7 @@ def compute_emit_bmag(k, beamsize_squared, q_len, rmat, beta0=None, alpha0=None,
         beta0: float or tensor shape (batchshape x 1) designating the design beta twiss parameter at the screen
         
         alpha0: float or tensor shape (batchshape x 1) designating the design alpha twiss parameter at the screen
-        
-        get_bmag: boolean, whether or not to compute the bmag along with the emittance
-                    (Set to False for faster computation of only the emittance)
+
     Returns:
         emit: tensor shape (batchshape) containing the geometric emittance fit results for each scan
         bmag_min: tensor shape (batchshape) containing the bmag corresponding to the optimal point for each scan

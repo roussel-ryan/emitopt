@@ -9,8 +9,8 @@ def compute_emit_bayesian(
     beamsize,
     q_len,
     rmat,
-    beta0=1.,
-    alpha0=0.,
+    beta0=None,
+    alpha0=None,
     n_samples=10000,
     n_steps_quad_scan=10,
     covar_module=None,
@@ -84,19 +84,21 @@ def compute_emit_bayesian(
     )
     
     (emit, bmag, sig, is_valid) = compute_emit_bmag(k=k_virtual, 
-                                                              beamsize_squared=bss_virtual, 
-                                                              q_len=q_len, 
-                                                              rmat=rmat, 
-                                                              beta0=beta0, 
-                                                              alpha0=alpha0)
+                                                      beamsize_squared=bss_virtual, 
+                                                      q_len=q_len, 
+                                                      rmat=rmat, 
+                                                      beta0=beta0, 
+                                                      alpha0=alpha0)
 
     sample_validity_rate = (torch.sum(is_valid) / is_valid.shape[0]).reshape(1)
 
     # filter on physical validity
     cut_ids = torch.tensor(range(emit.shape[0]))[is_valid]
     emit = torch.index_select(emit, dim=0, index=cut_ids)
-    bmag = torch.index_select(bmag, dim=0, index=cut_ids)
     sig = torch.index_select(sig, dim=0, index=cut_ids)
+
+    if bmag is not None:
+        bmag = torch.index_select(bmag, dim=0, index=cut_ids)
 
     if visualize:
         plot_valid_thick_quad_fits(k, 
@@ -110,7 +112,7 @@ def compute_emit_bayesian(
     return emit, bmag, sig, sample_validity_rate
 
 
-def compute_emit_bmag(k, beamsize_squared, q_len, rmat, beta0=1., alpha0=0., get_bmag=True, thick=True):
+def compute_emit_bmag(k, beamsize_squared, q_len, rmat, beta0=None, alpha0=None, thick=True):
     """
     Computes the emittance(s) corresponding to a set of quadrupole measurement scans
     using a thick OR thin quad model.
@@ -153,8 +155,11 @@ def compute_emit_bmag(k, beamsize_squared, q_len, rmat, beta0=1., alpha0=0., get
     is_valid = torch.logical_and(sig[...,0,0] > 0, sig[...,2,0] > 0) # result batchshape
     is_valid = torch.logical_and(is_valid, ~torch.isnan(emit)) # result batchshape
     
-    if get_bmag:
+    if (beta0 is not None) and (alpha0 is not None):
         bmag = compute_bmag(sig, emit, total_rmats, beta0, alpha0) # result batchshape
+    elif beta0 is not None or alpha0 is not None:
+        print("WARNING: beta0 and alpha0 must both be specified to compute bmag. Skipping bmag calc.")
+        bmag = None
     else:
         bmag = None
 

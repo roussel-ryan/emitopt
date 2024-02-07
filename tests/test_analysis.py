@@ -153,3 +153,11 @@ class TestAnalysis:
         
         assert bmag is None
         assert (emit.quantile(0.025) < emit_x_true) and (emit.quantile(0.975) > emit_x_true)
+        
+        emit, bmag, sig, is_valid = compute_emit_bayesian(k_x,
+                                                      y_x,
+                                                      q_len,
+                                                      rmat_x)
+        
+        assert bmag is None
+        assert (emit.quantile(0.025) < emit_x_true) and (emit.quantile(0.975) > emit_x_true)

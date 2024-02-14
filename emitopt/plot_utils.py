@@ -85,6 +85,10 @@ def plot_valid_thick_quad_fits(k, beamsize, q_len, rmat, emit, bmag, sig, ci=0.9
 
 
 def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, show_valid_only=True):
+    """
+    Plots the distribution of optimal input values from the virtual minimization results as a function 
+    of iteration number (one plot for each input variable).
+    """
     ndim = results[1]["x_tuning_best"].shape[-1]
     niter = max(results.keys())
     nsamples = results[1]["x_tuning_best"].shape[0]
@@ -123,6 +127,10 @@ def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, 
 
 
 def plot_sample_optima_convergence_emits(results):
+    """
+    Plots the distribution of optimal emittance values from the virtual minimization
+    results as a function of iteration number.
+    """
     niter = max(results.keys())
     nsamples = results[1]["emit_best"].shape[0]
     
@@ -201,6 +209,10 @@ def plot_model_cross_section(model, vocs, scan_dict, nx=50, ny=50):
 
 
 def plot_pathwise_surface_samples_2d(optimizer): # paper figure
+    """
+    Plots a few GP model posterior sample surfaces for a 2d input space. Also plots the virtual emittance
+    prediction as a function of the single tuning parameter.
+    """
     if ndim==2:
 
         device = torch.tensor(1).device
@@ -387,6 +399,10 @@ def plot_pathwise_surface_samples_2d(optimizer): # paper figure
 
 
 def plot_pathwise_emittance_vs_tuning(optimizer, x_origin, sample_ids=None, tkwargs:dict=None, transform_target=False):
+    """
+    Plots the emittance cross-sections corresponding to the posterior beam size pathwise sample functions. 
+    The cross-sections are evaluated about the point in input space given by x_origin.
+    """
     tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
     
     if sample_ids is None:
@@ -434,6 +450,12 @@ def plot_pathwise_emittance_vs_tuning(optimizer, x_origin, sample_ids=None, tkwa
 
 
 def plot_virtual_emittance_vs_tuning(optimizer, x_origin, ci=0.95, tkwargs:dict=None, n_samples=10000):
+    """
+    Plots the emittance cross-sections corresponding to the GP posterior beam size model. 
+    This function uses n_samples to produce a confidence interval.
+    It DOES NOT use the pathwise sample functions, but rather draws new samples using BoTorch's 
+    built-in posterior sampling.
+    """
     tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
     
     #extract GP models
@@ -509,7 +531,9 @@ def plot_virtual_emittance_vs_tuning(optimizer, x_origin, ci=0.95, tkwargs:dict=
 
 
 def plot_posterior_mean_modeled_emittance(optimizer, x_tuning, ground_truth_emittance_fn=None):
-    
+    """
+    Plots the emittance cross-sections corresponding to the GP posterior mean of the beam size.
+    """
     
     # get the beam size squared models in x and y
     model = optimizer.generator.train_model()

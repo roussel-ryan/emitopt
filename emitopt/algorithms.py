@@ -341,8 +341,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         emit, bmag, sig, is_valid = compute_emit_bmag(k, 
                                           beamsize_squared, 
                                           self.q_len, 
-                                          rmat, 
-                                          get_bmag=False, 
+                                          rmat,  
                                           thick=self.thick_quad)
         # result shapes: (n_samples x n_tuning), (n_samples x n_tuning), (n_samples x n_tuning x 3 x 1), (n_samples x n_tuning) 
         # or (2*n_samples x n_tuning), (2*n_samples x n_tuning), (2*n_samples x n_tuning x 3 x 1), (2*n_samples x n_tuning) 
@@ -375,14 +374,21 @@ class ScipyBeamAlignment(Algorithm, ABC):
     meas_dims: Union[int, list[int]] = Field(
         description="list of indeces identifying the measurement quad dimensions in the model"
     )
+    bpm_names : list[str] = Field(
+        description="names of beam position monitors used to measure alignment")
 
+    @property
+    def model_names_ordered(self) -> list:  
+        # get observable model names in the order they appear in the model (ModelList)
+        return [name for name in self.bpm_names]
+    
     def get_execution_paths(
-        self, model: Model, bounds: Tensor
+        self, model: ModelList, bounds: Tensor
     ) -> Tuple[Tensor, Tensor, Dict]:
         """get execution paths that minimize the objective function"""
 
         x_stars_all, xs, ys, post_paths_cpu = self.get_sample_optimal_tuning_configs(
-            model, bounds, cpu=False
+            model.models[0], bounds, cpu=False
         )
 
         xs_exe = xs
@@ -427,7 +433,7 @@ class ScipyBeamAlignment(Algorithm, ABC):
         # minimize
         def target_func_for_scipy(x_tuning_flat):
             return (
-                sum_samplewise_misalignment_flat_x(
+                self.sum_samplewise_misalignment_flat_x(
                     post_paths_cpu,
                     torch.tensor(x_tuning_flat),
                     self.meas_dims,
@@ -439,7 +445,7 @@ class ScipyBeamAlignment(Algorithm, ABC):
             )
 
         def target_func_for_torch(x_tuning_flat):
-            return sum_samplewise_misalignment_flat_x(
+            return self.sum_samplewise_misalignment_flat_x(
                 post_paths_cpu, x_tuning_flat, self.meas_dims, meas_scans.cpu()
             )
 
@@ -489,7 +495,7 @@ class ScipyBeamAlignment(Algorithm, ABC):
             self.n_samples, -1
         )  # each row represents its respective sample's optimal tuning config
 
-        misalignment, xs, ys = post_path_misalignment(
+        misalignment, xs, ys = self.post_path_misalignment(
             post_paths_cpu,
             x_stars_all,  # n x d tensor
             self.meas_dims,  # list of integers
@@ -600,7 +606,7 @@ class ScipyBeamAlignment(Algorithm, ABC):
         x_tuning = x_tuning_flat.double().reshape(post_paths.n_samples, -1)
 
         return torch.sum(
-            post_path_misalignment(
+            self.post_path_misalignment(
                 post_paths, x_tuning, meas_dims, meas_scans, samplewise=True
             )[0]
         )

@@ -60,12 +60,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         description="Whether to use thick-quad (or thin, if False) transport for emittance calc")
 
     @property
-    def output_names_ordered(self) -> list:  
-        # get observable model names in the order they appear in the model (ModelList)
-        return [key for key in [self.x_key, self.y_key] if key]
-    
-    @property
-    def model_names_ordered(self) -> list:  
+    def observable_names_ordered(self) -> list:  
         # get observable model names in the order they appear in the model (ModelList)
         return [key for key in [self.x_key, self.y_key] if key]
 

@@ -88,6 +88,9 @@ def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, 
     """
     Plots the distribution of optimal input values from the virtual minimization results as a function 
     of iteration number (one plot for each input variable).
+    
+    Parameters:
+        results: dict containing {iteration_number:bax_generator.algorithm_results} as key/value pairs.
     """
     ndim = results[1]["x_tuning_best"].shape[-1]
     niter = max(results.keys())
@@ -130,6 +133,9 @@ def plot_sample_optima_convergence_emits(results):
     """
     Plots the distribution of optimal emittance values from the virtual minimization
     results as a function of iteration number.
+    
+    Parameters:
+        results: dict containing {iteration_number:bax_generator.algorithm_results} as key/value pairs.
     """
     niter = max(results.keys())
     nsamples = results[1]["emit_best"].shape[0]

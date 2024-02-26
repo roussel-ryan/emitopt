@@ -467,7 +467,7 @@ def plot_virtual_emittance_vs_tuning(optimizer, x_origin, ci=0.95, tkwargs:dict=
     #extract GP models
     model = optimizer.generator.train_model()
     bax_model_ids = [optimizer.generator.vocs.output_names.index(name)
-                            for name in optimizer.generator.algorithm.model_names_ordered]
+                            for name in optimizer.generator.algorithm.observable_names_ordered]
     bax_model = model.subset_output(bax_model_ids)
     meas_dim = optimizer.generator.algorithm.meas_dim
     
@@ -544,7 +544,7 @@ def plot_posterior_mean_modeled_emittance(optimizer, x_tuning, ground_truth_emit
     # get the beam size squared models in x and y
     model = optimizer.generator.train_model()
     bax_model_ids = [optimizer.generator.vocs.output_names.index(name)
-                            for name in optimizer.generator.algorithm.model_names_ordered]
+                            for name in optimizer.generator.algorithm.observable_names_ordered]
     bax_model = model.subset_output(bax_model_ids)
     
     n_tuning_dims = x_tuning.shape[1]
@@ -663,7 +663,7 @@ def plot_virtual_measurement_scan(optimizer, x_tuning, tkwargs=None):
     # get the beam size squared models in x and y
     model = optimizer.generator.train_model()
     bax_model_ids = [optimizer.generator.vocs.output_names.index(name)
-                            for name in optimizer.generator.algorithm.model_names_ordered]
+                            for name in optimizer.generator.algorithm.observable_names_ordered]
     bax_model = model.subset_output(bax_model_ids)
     
     if len(bax_model_ids)==2:

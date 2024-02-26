@@ -91,9 +91,9 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
             ).double()
             x_tuning_init = xs_tuning_init.flatten()
         if init=='smallest':
-            if len(self.output_names_ordered) == 1:
+            if len(self.observable_names_ordered) == 1:
                 bss = model.models[0].outcome_transform.untransform(model.models[0].train_targets)[0]
-            if len(self.output_names_ordered) == 2:
+            if len(self.observable_names_ordered) == 2:
                 bss_x, bss_y = [m.outcome_transform.untransform(m.train_targets)[0]
                                 for m in model.models]
                 bss = torch.sqrt(bss_x * bss_y)
@@ -127,16 +127,8 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
                     bounds,
                     cpu_tkwargs
                 )
-#         torch_target = target_func_for_torch(torch.zeros(self.n_samples))
-#         scipy_target = target_func_for_scipy(torch.zeros(self.n_samples))
-#         print('torch_target=',torch_target)
-#         print('scipy_target=',scipy_target)
+
         def target_jac_for_scipy(x):
-#             val = torch.autograd.functional.jacobian(
-#                     target_func_for_torch, torch.tensor(x, **cpu_tkwargs)
-#                 )
-#             print('jac = ', val)
-#             print('x = ', x)
             return (
                 torch.autograd.functional.jacobian(
                     target_func_for_torch, torch.tensor(x, **cpu_tkwargs)
@@ -373,7 +365,7 @@ class ScipyBeamAlignment(Algorithm, ABC):
         description="names of beam position monitors used to measure alignment")
 
     @property
-    def model_names_ordered(self) -> list:  
+    def observable_names_ordered(self) -> list:  
         # get observable model names in the order they appear in the model (ModelList)
         return [name for name in self.bpm_names]
     

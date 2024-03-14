@@ -361,38 +361,23 @@ class ScipyBeamAlignment(Algorithm, ABC):
     meas_dims: Union[int, list[int]] = Field(
         description="list of indeces identifying the measurement quad dimensions in the model"
     )
-    bpm_names : list[str] = Field(
-        description="names of beam position monitors used to measure alignment")
+    x_key: str = Field(None,
+        description="oberservable name for x centroid position"
+    )
+    y_key: str = Field(None,
+        description="oberservable name for y centroid position"
+    )
 
     @property
     def observable_names_ordered(self) -> list:  
         # get observable model names in the order they appear in the model (ModelList)
-        return [name for name in self.bpm_names]
+        return [key for key in [self.x_key, self.y_key] if key]
     
     def get_execution_paths(
-        self, model: ModelList, bounds: Tensor
+        self, model: ModelList, bounds: Tensor, verbose=False
     ) -> Tuple[Tensor, Tensor, Dict]:
         """get execution paths that minimize the objective function"""
 
-        x_stars_all, xs, ys, post_paths_cpu = self.get_sample_optimal_tuning_configs(
-            model.models[0], bounds, cpu=False
-        )
-
-        xs_exe = xs
-        ys_exe = ys.reshape(*ys.shape, 1)
-
-        results_dict = {
-            "xs_exe": xs_exe,
-            "ys_exe": ys_exe,
-            "X_stars": x_stars_all,
-            "post_paths_cpu": post_paths_cpu,
-        }
-
-        return xs_exe, ys_exe, results_dict
-
-    def get_sample_optimal_tuning_configs(
-        self, model: Model, bounds: Tensor, verbose=False, cpu=False
-    ):
         meas_scans = torch.index_select(
             bounds.T, dim=0, index=torch.tensor(self.meas_dims)
         )
@@ -405,11 +390,11 @@ class ScipyBeamAlignment(Algorithm, ABC):
         device = torch.tensor(1).device
         torch.set_default_tensor_type("torch.DoubleTensor")
 
-        cpu_model = copy.deepcopy(model).cpu()
-
-        post_paths_cpu = draw_linear_product_kernel_post_paths(
-            cpu_model, n_samples=self.n_samples
-        )
+        cpu_models = [copy.deepcopy(m).cpu() for m in model.models]
+        sample_funcs_list = [
+            draw_linear_product_kernel_post_paths(cpu_model, n_samples=self.n_samples)
+                for cpu_model in cpu_models
+            ]
 
         xs_tuning_init = unif_random_sample_domain(
             self.n_samples, tuning_domain
@@ -421,7 +406,7 @@ class ScipyBeamAlignment(Algorithm, ABC):
         def target_func_for_scipy(x_tuning_flat):
             return (
                 self.sum_samplewise_misalignment_flat_x(
-                    post_paths_cpu,
+                    sample_funcs_list,
                     torch.tensor(x_tuning_flat),
                     self.meas_dims,
                     meas_scans.cpu(),
@@ -433,7 +418,7 @@ class ScipyBeamAlignment(Algorithm, ABC):
 
         def target_func_for_torch(x_tuning_flat):
             return self.sum_samplewise_misalignment_flat_x(
-                post_paths_cpu, x_tuning_flat, self.meas_dims, meas_scans.cpu()
+                sample_funcs_list, x_tuning_flat, self.meas_dims, meas_scans.cpu()
             )
 
         def target_jac(x):
@@ -476,35 +461,40 @@ class ScipyBeamAlignment(Algorithm, ABC):
                 "steps in get_sample_optimal_tuning_configs().",
             )
 
-        x_stars_flat = torch.tensor(res.x)
+        x_tuning_best_flat = torch.tensor(res.x)
 
-        x_stars_all = x_stars_flat.reshape(
-            self.n_samples, -1
+        x_tuning_best = x_tuning_best_flat.reshape(
+            self.n_samples, 1, -1
         )  # each row represents its respective sample's optimal tuning config
 
-        misalignment, xs, ys = self.post_path_misalignment(
-            post_paths_cpu,
-            x_stars_all,  # n x d tensor
-            self.meas_dims,  # list of integers
-            meas_scans.cpu(),  # tensor of measurement device(s) scan inputs, shape: len(meas_dims) x 2
-            samplewise=True,
-        )
 
         if device.type == "cuda":
             torch.set_default_tensor_type("torch.cuda.DoubleTensor")
 
-        if cpu:
-            return x_stars_all, xs, ys, post_paths_cpu  # x_stars should still be on cpu
-        else:
-            return x_stars_all.to(device), xs.to(device), ys.to(device), post_paths_cpu
+        xs = self.get_meas_scan_inputs(x_tuning_best, meas_scans, self.meas_dims)
+        xs_exe = xs
         
-    def post_path_misalignment(
+        # evaluate posterior samples at input locations
+        ys_exe_list = [sample_func(xs_exe).reshape(
+            self.n_samples, 1+len(self.meas_dims), 1
+        ) for sample_func in sample_funcs_list]
+        ys_exe = torch.cat(ys_exe_list, dim=-1)
+                            
+        results_dict = {
+            "xs_exe": xs_exe,
+            "ys_exe": ys_exe,
+            "x_tuning_best": x_tuning_best,
+            "sample_funcs_list": sample_funcs_list,
+        }
+
+        return xs_exe, ys_exe, results_dict
+        
+    def sample_funcs_misalignment(
         self,
-        post_paths,
+        sample_funcs_list,
         x_tuning,  # n x d tensor
         meas_dims,  # list of integers
         meas_scans,  # tensor of measurement device(s) scan inputs, shape: len(meas_dims) x 2
-        samplewise=False,
     ):
         """
         A function that computes the beam misalignment(s) through a set of measurement quadrupoles
@@ -512,18 +502,14 @@ class ScipyBeamAlignment(Algorithm, ABC):
         respect to some tuning devices and some measurement quadrupoles.
 
         arguments:
-            post_paths: a pathwise posterior sample from a SingleTaskGP model of the beam centroid
-                        position (assumes Linear ProductKernel)
+            sample_funcs_list: a list of pathwise posterior samples for x, y, or both 
+                        from a SingleTaskGP model of the beam centroid positions (assumes Linear ProductKernel)
             x_tuning: a tensor of shape (n_samples x n_tuning_dims) where the nth row defines a point in
                         tuning-parameter space at which to evaluate the misalignment of the nth
                         posterior pathwise sample given by post_paths
             meas_dims: the dimension indeces of our model that describe the quadrupole measurement devices
             meas_scans: a tensor of measurement scan inputs, shape len(meas_dims) x 2, where the nth row
                         contains two input scan values for the nth measurement quadrupole
-            samplewise: boolean. Set to False if you want to evaluate the misalignment for every point on
-                        every sample. If set to True, the misalignment for the nth sample (given by post_paths)
-                        will only be evaluated at the nth point (given by x_tuning). If samplewise is set to
-                        True, x_tuning must be shape n_samples x n_tuning_dims
 
          returns:
              misalignment: the sum of the squared slopes of the beam centroid model output with respect to the
@@ -535,43 +521,50 @@ class ScipyBeamAlignment(Algorithm, ABC):
                 are produced from a SingleTaskGP with Linear ProductKernel (i.e. post_paths should have
                 linear output for each dimension).
         """
+        xs = self.get_meas_scan_inputs(x_tuning, meas_scans, meas_dims)
+
+        sample_misalignments_sum_list = [] # list to store the sum of the samplewise misalignments in x, y or both
+        sample_ys_list = [] # list to store the centroid positions for x, y or both
+        for sample_func in sample_funcs_list:
+            ys = sample_func(xs)
+            ys = ys.reshape(self.n_samples, -1)
+
+            rise = ys[:, 1:] - ys[:, 0].reshape(-1, 1)
+            run = (meas_scans[:, 1] - meas_scans[:, 0]).T.repeat(ys.shape[0], 1)
+            slope = rise / run
+
+            misalignment = slope.pow(2).sum(dim=1)
+            sample_misalignments_sum_list += [misalignment]
+            sample_ys_list += [ys]
+        
+        total_misalignment = sum(sample_misalignments_sum_list)
+        return total_misalignment, xs, sample_ys_list
+
+    def get_meas_scan_inputs(self, x_tuning, meas_scans, meas_dims):
+        # meas_scans = torch.index_select(
+        #     bounds.T, dim=0, index=torch.tensor(self.meas_dims)
+        # )    
         n_steps_meas_scan = 1 + len(meas_dims)
         n_tuning_configs = x_tuning.shape[0]
 
         # construct measurement scan inputs
-        xs = torch.repeat_interleave(x_tuning, n_steps_meas_scan, dim=0)
+        xs = torch.repeat_interleave(x_tuning, n_steps_meas_scan, dim=-2)
 
         for i in range(len(meas_dims)):
             meas_dim = meas_dims[i]
             meas_scan = meas_scans[i]
             full_scan_column = meas_scan[0].repeat(n_steps_meas_scan, 1)
             full_scan_column[i + 1, 0] = meas_scan[1]
-            full_scan_column_repeated = full_scan_column.repeat(n_tuning_configs, 1)
+            full_scan_column_repeated = full_scan_column.repeat(*x_tuning.shape[:-1], 1)
 
             xs = torch.cat(
-                (xs[:, :meas_dim], full_scan_column_repeated, xs[:, meas_dim:]), dim=1
+                (xs[..., :meas_dim], full_scan_column_repeated, xs[..., meas_dim:]), dim=-1
             )
 
-        if samplewise:
-            xs = xs.reshape(n_tuning_configs, n_steps_meas_scan, -1)
+        return xs
 
-        ys = post_paths(xs)
-        ys = ys.reshape(-1, n_steps_meas_scan)
-
-        rise = ys[:, 1:] - ys[:, 0].reshape(-1, 1)
-        run = (meas_scans[:, 1] - meas_scans[:, 0]).T.repeat(ys.shape[0], 1)
-        slope = rise / run
-
-        misalignment = slope.pow(2).sum(dim=1)
-
-        if not samplewise:
-            ys = ys.reshape(-1, n_tuning_configs, n_steps_meas_scan)
-            misalignment = misalignment.reshape(-1, n_tuning_configs)
-
-        return misalignment, xs, ys
-    
     def sum_samplewise_misalignment_flat_x(
-        self, post_paths, x_tuning_flat, meas_dims, meas_scans
+        self, sample_funcs_list, x_tuning_flat, meas_dims, meas_scans
     ):
         """
         A wrapper function that computes the sum of the samplewise misalignments for more convenient
@@ -590,10 +583,10 @@ class ScipyBeamAlignment(Algorithm, ABC):
                     of the pathwise misalignments.
         """
 
-        x_tuning = x_tuning_flat.double().reshape(post_paths.n_samples, -1)
+        x_tuning = x_tuning_flat.double().reshape(self.n_samples, 1, -1)
 
         return torch.sum(
-            self.post_path_misalignment(
-                post_paths, x_tuning, meas_dims, meas_scans, samplewise=True
+            self.sample_funcs_misalignment(
+                sample_funcs_list, x_tuning, meas_dims, meas_scans
             )[0]
         )

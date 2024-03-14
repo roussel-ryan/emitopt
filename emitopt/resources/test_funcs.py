@@ -1,14 +1,10 @@
-# +
-from emitopt.beam_dynamics import twiss_transport_mat_from_rmat, build_quad_rmat
+def centroid_position(input_dict, trim_name_x, trim_name_y, quad_name, init_xpos=1., init_ypos=1.): 
+    trim_x = input_dict[trim_name_x]
+    trim_y = input_dict[trim_name_y]
+    quad = input_dict[quad_name]
 
-def single_quadrupole_with_scaling(k, s):
-    quad_rmat = 
-
-
-def eval_beamsize(input_dict):
-    k = input_dict["x0"]
-    s = torch.tensor([input_data[f"x{i}"] for i in range(1, len(input_dict.keys()))])
-    
-# -
-
-
+    xpos = init_xpos + trim_x + quad*(init_xpos + trim_x)
+    ypos = init_ypos + trim_y - quad*(init_ypos + trim_y) # note the negative sign for opposite kick in y-direction
+    result = {'xpos': float(xpos)*100,
+               'ypos': float(ypos)*100}
+    return result

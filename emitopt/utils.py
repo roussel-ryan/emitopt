@@ -1,9 +1,4 @@
-import torch
-
-
-def sum_samplewise_misalignment_flat_x(
-    post_paths, x_tuning_flat, meas_dims, meas_scans
-):
+def get_quad_scale_factor(E, q_len):
     """
     A wrapper function that computes the sum of the samplewise misalignments for more convenient
     minimization with scipy.
@@ -1494,7 +1489,7 @@ def get_quad_strength_conversion_factor(E=0.135, q_len=0.108):
     in [kG] to the geometric focusing strengths in [m^-2].
 
     Parameters:
-        E: Beam energy in [MeV]
+        E: Beam energy in [GeV]
         q_len: quadrupole length or "thickness" (longitudinal) in [m]
 
     Returns:
@@ -1504,171 +1499,11 @@ def get_quad_strength_conversion_factor(E=0.135, q_len=0.108):
     xs_quad = field integrals in [kG]
     E = beam energy in [GeV]
     q_len = quad thickness in [m]
-    conversion_factor = get_quad_strength_conversion_factor(E, q_len)
-    ks_quad = conversion_factor * xs_quad # results in the quadrupole geometric focusing strength
+    scale_factor = get_quad_scale_factor(E, q_len)
+    ks_quad = scale_factor * xs_quad # results in the quadrupole geometric focusing strength
     """
     gamma = E / (0.511e-3)  # beam energy (GeV) divided by electron rest energy (GeV)
     beta = 1.0 - 1.0 / (2 * gamma**2)
-    conversion_factor = 0.299 / (10.0 * q_len * beta * E)
+    scale_factor = 0.299 / (10.0 * q_len * beta * E)
 
-    return conversion_factor
-
-
-def normalize_emittance(emit, energy):
-    gamma = energy / (0.511e-3)  # beam energy (GeV) divided by electron rest energy (GeV)
-    beta = 1.0 - 1.0 / (2 * gamma**2)
-    emit_n = gamma * beta * emit
-    return emit_n
-
-
-def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, show_valid_only=True):
-    ndim = results[1]["x_stars_all"].shape[1]
-    niter = max(results.keys())
-    nsamples = results[1]["x_stars_all"].shape[0]
-
-    if tuning_parameter_names is None:
-        tuning_parameter_names = ['tp_' + str(i) for i in range(ndim)]
-
-    from matplotlib import pyplot as plt
-    
-    fig, axs = plt.subplots(ndim, 1)
-
-    for i in range(ndim):
-
-        if ndim > 1:
-            ax = axs[i]
-        else:
-            ax = axs
-
-        ax.set_ylabel(tuning_parameter_names[i])
-        ax.set_xlabel("iteration")
-        
-        if i == 0:
-            ax.set_title("Sample Optima Distribution: Tuning Parameters")
-            
-        for key in results.keys():
-            if show_valid_only:
-                is_valid = results[key]["is_valid"]
-                cut_ids = torch.tensor(range(nsamples))[is_valid]
-            else:
-                cut_ids = torch.tensor(range(nsamples))
-            ax.scatter(torch.tensor([key]).repeat(len(cut_ids)), 
-                       torch.index_select(results[key]["x_stars_all"], dim=0, index=cut_ids)[:,i],
-                       c='C0')
-    plt.tight_layout()
-
-
-def plot_sample_optima_convergence_emits(results):
-    niter = max(results.keys())
-    nsamples = results[1]["emit_stars_all"].shape[0]
-    
-    from matplotlib import pyplot as plt
-
-    fig, ax = plt.subplots(1)
-
-    ax.set_ylabel("$\epsilon$")
-    ax.set_xlabel("iteration")
-    ax.set_title("Sample Optima Distribution: Emittance")
-    for key in results.keys():
-        is_valid = results[key]["is_valid"]
-        valid_ids = torch.tensor(range(nsamples))[is_valid]
-        ax.scatter(torch.tensor([key]).repeat(torch.sum(is_valid)), 
-                   torch.index_select(results[key]["emit_stars_all"], dim=0, index=valid_ids)[:,0].detach(), 
-                   c='C0')
-    plt.tight_layout()
-
-
-def plot_valid_emit_prediction_at_x_tuning(model, 
-                                           x_tuning, 
-                                           scale_factor, 
-                                           q_len, 
-                                           distance, 
-                                           bounds, 
-                                           meas_dim, 
-                                           n_samples, 
-                                           n_steps_quad_scan):
-    (
-    emits_at_target_valid,
-    sample_validity_rate,
-    ) = get_valid_emittance_samples(
-            model,
-            scale_factor,
-            q_len,
-            distance,
-            x_tuning,
-            bounds.T,
-            meas_dim,
-            n_samples=n_samples,
-            n_steps_quad_scan=n_steps_quad_scan,
-        )
-    
-    from matplotlib import pyplot as plt
-
-    plt.hist(emits_at_target_valid.flatten().cpu(), density=True)
-    plt.xlabel('Predicted Optimal Emittance')
-    plt.ylabel('Probability Density')
-    plt.tight_layout()
-    plt.show()
-    print('sample validity rate:', sample_validity_rate)
-
-
-def plot_model_cross_section(model, vocs, scan_dict, nx=50, ny=50):
-    scan_var_model_ids = {}
-    scan_inputs_template = []
-    for i, var_name in enumerate(vocs.variable_names):
-        if isinstance(scan_dict[var_name], list):
-            if len(scan_dict[var_name])!=2:
-                raise ValueError("Entries must be either float or 2-element list of floats.")
-            scan_var_model_ids[var_name] = i
-            scan_inputs_template += [scan_dict[var_name][0]]
-        else:
-            if not isinstance(scan_dict[var_name],float):
-                raise ValueError("Entries must be either float or 2-element list of floats.")
-            scan_inputs_template += [scan_dict[var_name]]
-    
-    if len(scan_var_model_ids)!=2:
-        raise ValueError("Exactly 2 keys must have entries that are 2-element lists.")
-    
-    scan_inputs = torch.tensor(scan_inputs_template).repeat(nx*ny, 1)
-
-    scan_varx = list(scan_var_model_ids.keys())[0]
-    scan_vary = list(scan_var_model_ids.keys())[1]
-
-    lsx = torch.linspace(*scan_dict[scan_varx], nx)
-    lsy = torch.linspace(*scan_dict[scan_vary], ny)
-    meshx, meshy = torch.meshgrid((lsx, lsy), indexing='xy')
-    mesh_points_serial = torch.cat((meshx.reshape(-1,1), meshy.reshape(-1,1)), dim=1)
-    
-    model_idx = scan_var_model_ids[scan_varx]
-    scan_inputs[:,model_idx] = mesh_points_serial[:,0]
-    
-    model_idy = scan_var_model_ids[scan_vary]
-    scan_inputs[:,model_idy] = mesh_points_serial[:,1]
-
-    with torch.no_grad():
-        posterior = model.posterior(scan_inputs)
-        mean = posterior.mean
-        var = posterior.variance
-
-    mean = mean.reshape(ny, nx)
-    var = var.reshape(ny, nx)
-    
-    from matplotlib import pyplot as plt
-
-    fig, axs = plt.subplots(2)
-
-    ax = axs[0]
-    m = ax.pcolormesh(meshx, meshy, mean)
-    ax.set_xlabel(scan_varx)
-    ax.set_ylabel(scan_vary)
-    ax.set_title('Posterior Mean')
-    cbar_m = fig.colorbar(m, ax=ax)
-    
-    ax = axs[1]
-    v = ax.pcolormesh(meshx, meshy, var)
-    ax.set_xlabel(scan_varx)
-    ax.set_ylabel(scan_vary)
-    ax.set_title('Posterior Variance')
-    cbar_v = fig.colorbar(v, ax=ax)
-
-    plt.tight_layout()
+    return scale_factor

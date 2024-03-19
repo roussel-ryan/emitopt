@@ -12,7 +12,7 @@ def draw_poly_kernel_prior_paths(
 ):  # poly_kernel is a scaled polynomial kernel
     c = poly_kernel.offset
     degree = poly_kernel.power
-    ws = torch.randn(size=[n_samples, 1, degree + 1])
+    ws = torch.randn(size=[n_samples, 1, degree + 1], device=c.device)
 
     def paths(xs):
         if (
@@ -61,8 +61,8 @@ def draw_product_kernel_prior_paths(model, n_samples):
     # with kernel matched to the Matern component of the passed model
 
     matern_model = SingleTaskGP(
-        train_X=torch.tensor([[0.0] * (ndim - 1)]),  # add index specification
-        train_Y=torch.tensor([[0.0]]),
+        train_X=torch.tensor([[0.0] * (ndim - 1)], device=model.train_inputs[0].device),  # add index specification
+        train_Y=torch.tensor([[0.0]], device=model.train_inputs[0].device),
         likelihood=likelihood,
         mean_module=mean_module,
         covar_module=matern_covar_module,
@@ -71,7 +71,7 @@ def draw_product_kernel_prior_paths(model, n_samples):
     )
 
     matern_prior_paths = draw_kernel_feature_paths(
-        model=matern_model, sample_shape=torch.Size([n_samples])
+        model=matern_model, sample_shape=torch.Size([n_samples]), num_features=2048
     )
 
     quad_kernel = copy.deepcopy(model.covar_module.base_kernel.kernels[1])
@@ -107,7 +107,7 @@ def draw_product_kernel_post_paths(model, n_samples, cpu=True):
 
     sigma = torch.sqrt(model.likelihood.noise[0])
 
-    K = Knn + sigma**2 * torch.eye(Knn.shape[0])
+    K = Knn + sigma**2 * torch.eye(Knn.shape[0], device=Knn.device)
 
     prior_residual = train_y.repeat(n_samples, 1, 1).reshape(
         n_samples, -1
@@ -251,8 +251,8 @@ def compare_sampling_methods(
             print("batch", i)
 
         # pathwise sampling
-        #         post_paths = draw_product_kernel_post_paths(
-        post_paths = draw_linear_product_kernel_post_paths(
+        post_paths = draw_product_kernel_post_paths(
+#         post_paths = draw_linear_product_kernel_post_paths(
             model, n_samples=n_samples_per_batch
         )
 

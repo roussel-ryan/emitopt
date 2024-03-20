@@ -3,7 +3,7 @@ from matplotlib import pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import matplotlib.patches as mpatches
 from emitopt.beam_dynamics import build_quad_rmat, propagate_beam_quad_scan
-
+import copy
 
 def plot_valid_thick_quad_fits(k, beamsize, q_len, rmat, emit, bmag, sig, ci=0.95, tkwargs=None):
     """
@@ -84,21 +84,22 @@ def plot_valid_thick_quad_fits(k, beamsize, q_len, rmat, emit, bmag, sig, ci=0.9
     plt.tight_layout()
 
 
-def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, show_valid_only=True):
+def plot_sample_optima_convergence_inputs(generator, results, show_valid_only=True):
     """
     Plots the distribution of optimal input values from the virtual minimization results as a function 
     of iteration number (one plot for each input variable).
     
     Parameters:
-        results: dict containing {iteration_number:bax_generator.algorithm_results} as key/value pairs.
+        results: list containing bax_generator.algorithm_results from each iteration (in order).
     """
-    ndim = results[1]["x_tuning_best"].shape[-1]
-    niter = max(results.keys())
-    nsamples = results[1]["x_tuning_best"].shape[0]
+    ndim = results[0]["x_tuning_best"].shape[-1]
+    niter = len(results)
+    nsamples = results[0]["x_tuning_best"].shape[0]
 
-    if tuning_parameter_names is None:
-        tuning_parameter_names = ['tp_' + str(i) for i in range(ndim)]
-    
+    # if tuning_parameter_names is None:
+    #     tuning_parameter_names = ['tp_' + str(i) for i in range(ndim)]
+    tuning_parameter_names = [name for i, name in enumerate(generator.vocs.variable_names)
+                              if i != generator.algorithm.meas_dim]
     fig, axs = plt.subplots(ndim, 1)
     fig.set_size_inches(8,3*ndim)
 
@@ -115,14 +116,14 @@ def plot_sample_optima_convergence_inputs(results, tuning_parameter_names=None, 
         if i == 0:
             ax.set_title("Sample Optima Distribution: Tuning Parameters")
             
-        for key in results.keys():
+        for j in range(len(results)):
             if show_valid_only:
-                ax.scatter(torch.tensor([key]).repeat(len(results[key]["x_tuning_best_retained"][...,i])), 
-                           results[key]["x_tuning_best_retained"][...,i].flatten(),
+                ax.scatter(torch.tensor([j]).repeat(len(results[j]["x_tuning_best_retained"][...,i])), 
+                           results[j]["x_tuning_best_retained"][...,i].flatten(),
                            c='C0')
             else:
-                ax.scatter(torch.tensor([key]).repeat(len(results[key]["x_tuning_best"][...,i])), 
-                           results[key]["x_tuning_best"][...,i].flatten(),
+                ax.scatter(torch.tensor([j]).repeat(len(results[j]["x_tuning_best"][...,i])), 
+                           results[j]["x_tuning_best"][...,i].flatten(),
                            c='C0')
     plt.tight_layout()
     
@@ -137,17 +138,17 @@ def plot_sample_optima_convergence_emits(results):
     Parameters:
         results: dict containing {iteration_number:bax_generator.algorithm_results} as key/value pairs.
     """
-    niter = max(results.keys())
-    nsamples = results[1]["emit_best"].shape[0]
+    niter = len(results)
+    nsamples = results[0]["emit_best"].shape[0]
     
     fig, ax = plt.subplots(1)
 
     ax.set_ylabel("$\epsilon$")
     ax.set_xlabel("iteration")
     ax.set_title("Sample Optima Distribution: Emittance")
-    for key in results.keys():
-        ax.scatter(torch.tensor([key]).repeat(len(results[key]["emit_best"].flatten())), 
-                   results[key]["emit_best"].flatten().detach(), 
+    for i in range(len(results)):
+        ax.scatter(torch.tensor([i]).repeat(len(results[i]["emit_best"].flatten())), 
+                   results[i]["emit_best"].flatten().detach(), 
                    c='C0')
     plt.tight_layout()
     
@@ -454,8 +455,13 @@ def plot_pathwise_emittance_vs_tuning(optimizer, x_origin, sample_ids=None, tkwa
     plt.tight_layout()
     return fig, axs
 
-
-def plot_virtual_emittance(optimizer, x_origin, ci=0.95, tkwargs:dict=None, n_points = 100, n_samples=10000):
+# def plot_virtual_emittance(optimizer, reference_point, ci=0.95, tkwargs:dict=None, n_points = 50, n_samples=1000):
+#     x_origin = []
+#     for name in optimizer.generator.vocs.variable_names:
+#         if name in reference_point.keys():
+#             x_origin += [reference_point[name].reshape(1,1)]
+#     x_origin = torch.cat(x_origin, dim=1)
+def plot_virtual_emittance(optimizer, reference_point, dim='xy', ci=0.95, tkwargs:dict=None, n_points = 50, n_samples=1000):
     """
     Plots the emittance cross-sections corresponding to the GP posterior beam size model. 
     This function uses n_samples to produce a confidence interval.
@@ -463,22 +469,35 @@ def plot_virtual_emittance(optimizer, x_origin, ci=0.95, tkwargs:dict=None, n_po
     built-in posterior sampling.
     """
     tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
-    
+    x_origin = []
+    for name in optimizer.generator.vocs.variable_names:
+        if name in reference_point.keys():
+            x_origin += [reference_point[name].reshape(1,1)]
+    x_origin = torch.cat(x_origin, dim=1)    
     #extract GP models
     model = optimizer.generator.train_model()
-    bax_model_ids = [optimizer.generator.vocs.output_names.index(name)
-                            for name in optimizer.generator.algorithm.observable_names_ordered]
+    if len(optimizer.generator.algorithm.observable_names_ordered) == 2:
+        if dim == 'x':
+            algorithm = copy.deepcopy(optimizer.generator.algorithm)
+            algorithm.y_key = None
+            bax_model_ids = [optimizer.generator.vocs.output_names.index(algorithm.x_key)]
+        elif dim == 'y':
+            algorithm = copy.deepcopy(optimizer.generator.algorithm)
+            algorithm.x_key = None
+            bax_model_ids = [optimizer.generator.vocs.output_names.index(algorithm.y_key)]
+        else:
+            algorithm = copy.deepcopy(optimizer.generator.algorithm)
+            bax_model_ids = [optimizer.generator.vocs.output_names.index(name)
+                                    for name in optimizer.generator.algorithm.observable_names_ordered]
     bax_model = model.subset_output(bax_model_ids)
-    meas_dim = optimizer.generator.algorithm.meas_dim
+    meas_dim = algorithm.meas_dim
     
     bounds = optimizer.generator._get_optimization_bounds()
     tuning_domain = torch.cat((bounds.T[: meas_dim], bounds.T[meas_dim + 1:]))
     
     tuning_param_names = optimizer.vocs.variable_names
     del tuning_param_names[meas_dim]
-    
-    algorithm = optimizer.generator.algorithm
-    
+        
     n_tuning_dims = x_origin.shape[1]
     
     fig, axs = plt.subplots(2, n_tuning_dims, sharex='col', sharey='row')
@@ -517,7 +536,6 @@ def plot_virtual_emittance(optimizer, x_origin, ci=0.95, tkwargs:dict=None, n_po
         
         ax.set_xlabel(tuning_param_names[i])
         if i==0:
-            ax.legend()
             ax.set_ylabel('Emittance')
             
         if n_tuning_dims==1:
@@ -530,7 +548,6 @@ def plot_virtual_emittance(optimizer, x_origin, ci=0.95, tkwargs:dict=None, n_po
 
         ax.set_xlabel(tuning_param_names[i])
         if i==0:
-            ax.legend()
             ax.set_ylabel('Sample Validity Rate')
             
     return fig, axs
@@ -651,7 +668,12 @@ def plot_acq_func_opt_results(optimizer):
 # -
 
 #TO-DO: Need to handle case for just x or y, CHECK x_meas/k_meas units
-def plot_virtual_measurement_scan(optimizer, x_tuning, tkwargs=None):
+def plot_virtual_measurement_scan(optimizer, reference_point, tkwargs=None):
+    x_tuning = []
+    for name in optimizer.generator.vocs.variable_names:
+        if name in reference_point.keys():
+            x_tuning += [reference_point[name].reshape(1,1)]
+    x_tuning = torch.cat(x_tuning, dim=1)   
     assert x_tuning.shape[0]==1
     meas_dim = optimizer.generator.algorithm.meas_dim
     n_steps_measurement_param = optimizer.generator.algorithm.n_steps_measurement_param

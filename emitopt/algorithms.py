@@ -62,7 +62,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         description="Either 'random' or 'smallest'. Determines initialization of sample minimization.")
     jitter: float = Field(0.,
         description="Float between 0 and 1 specifying randomness in sample minimization initialization")
-    transform_target: bool = Field(False,
+    transform_target: bool = Field(True,
         description="Whether to square the emittance in sample minimization to ensure continuity")
 
     @property

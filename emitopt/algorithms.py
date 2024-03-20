@@ -58,13 +58,19 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
         None, description="options to pass to scipy minimize")
     thick_quad: bool = Field(True,
         description="Whether to use thick-quad (or thin, if False) transport for emittance calc")
+    init: str = Field('random',
+        description="Either 'random' or 'smallest'. Determines initialization of sample minimization.")
+    jitter: float = Field(0.,
+        description="Float between 0 and 1 specifying randomness in sample minimization initialization")
+    transform_target: bool = Field(False,
+        description="Whether to square the emittance in sample minimization to ensure continuity")
 
     @property
     def observable_names_ordered(self) -> list:  
         # get observable model names in the order they appear in the model (ModelList)
         return [key for key in [self.x_key, self.y_key] if key]
 
-    def get_execution_paths(self, model: ModelList, bounds: Tensor, tkwargs=None, init='smallest', verbose=False):
+    def get_execution_paths(self, model: ModelList, bounds: Tensor, tkwargs=None, verbose=False):
         if not (self.x_key or self.y_key):
             raise ValueError("must provide a key for x, y, or both.")
         if (self.x_key and self.rmat_x is None) or (self.y_key and self.rmat_y is None):
@@ -85,12 +91,12 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
 
         temp_id = self.meas_dim + 1
         tuning_domain = torch.cat((bounds.T[: self.meas_dim], bounds.T[temp_id:]))
-        if init=='random':
+        if self.init=='random':
             xs_tuning_init = unif_random_sample_domain(
                 self.n_samples, tuning_domain
             ).double()
             x_tuning_init = xs_tuning_init.flatten()
-        if init=='smallest':
+        if self.init=='smallest':
             if len(self.observable_names_ordered) == 1:
                 bss = model.models[0].outcome_transform.untransform(model.models[0].train_targets)[0]
             if len(self.observable_names_ordered) == 2:
@@ -104,9 +110,10 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
             tuning_dims.remove(self.meas_dim)
             tuning_dims = torch.tensor(tuning_dims)
             x_tuning_best = torch.index_select(x_smallest_observed_beamsize, dim=1, index=tuning_dims)
-            x_tuning_init = x_tuning_best.repeat(self.n_samples,1).flatten()
-    #         print(x_tuning_init)
-
+            # x_tuning_init = x_tuning_best.repeat(self.n_samples,1).flatten()
+            x_tuning_random = unif_random_sample_domain(self.n_samples, tuning_domain).double()
+            x_tuning_init = ((1.-self.jitter)*x_tuning_best.repeat(self.n_samples,1) + 
+                             self.jitter*x_tuning_random).flatten()
         # minimize
         def target_func_for_scipy(x_tuning_flat):
             return (
@@ -273,7 +280,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
                                                                  x_tuning, 
                                                                  bounds, 
                                                                  tkwargs,
-                                                                 transform_target=True)[0]
+                                                                 transform_target=self.transform_target)[0]
 
         sample_targets_sum = torch.sum(sample_emittance)
 
@@ -309,7 +316,7 @@ class ScipyMinimizeEmittanceXY(Algorithm, ABC):
             k = x[..., self.meas_dim] * self.scale_factor # n_samples x n_tuning x n_steps
             beamsize_squared = bss[...,0] # result shape n_samples x n_tuning x n_steps
             rmat = self.rmat_x.to(**tkwargs).repeat(*bss.shape[:2],1,1) # n_samples x n_tuning x 2 x 2
-        if self.y_key and not self.x_key:
+        elif self.y_key and not self.x_key:
             k = x[..., self.meas_dim] * (-1. * self.scale_factor) # n_samples x n_tuning x n_steps
             beamsize_squared = bss[...,0] # result shape n_samples x n_tuning x n_steps
             rmat = self.rmat_y.to(**tkwargs).repeat(*bss.shape[:2],1,1) # n_samples x n_tuning x 2 x 2

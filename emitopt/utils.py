@@ -65,7 +65,7 @@ def x_tuning_to_dict(generator, x_tuning):
                               if i != generator.algorithm.meas_dim]
     x_tuning_dict = {}
     for i in range(x_tuning.shape[1]):
-        x_tuning_dict[tuning_parameter_names[i]] = x_tuning[0,i]
+        x_tuning_dict[tuning_parameter_names[i]] = float(x_tuning[0,i])
     return x_tuning_dict
 
 def x_tuning_to_tensor(generator, x_tuning_dict):
@@ -73,7 +73,7 @@ def x_tuning_to_tensor(generator, x_tuning_dict):
     Converts a dict of tuning parameter settings to a tensor of shape (n_points, n_tuning_dims)
     Each variable in x_tuning_dict must have the same number of values for concatenation.
     """
-    x_tuning = torch.cat([x_tuning_dict[name].reshape(-1,1) 
+    x_tuning = torch.cat([torch.tensor(x_tuning_dict[name]).reshape(-1,1) 
                           for i, name in enumerate(generator.vocs.variable_names)
                           if i != generator.algorithm.meas_dim],
                          dim=1)

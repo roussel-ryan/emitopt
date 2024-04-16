@@ -33,9 +33,9 @@ def compute_bmag(sig, emit, total_rmats, beta0, alpha0):
     # result shape (batchshape x nsteps)
 
     # select minimum bmag from quad scan
-    bmag_min, bmag_min_id = torch.min(bmag, dim=-1) # result shape (batchshape)
+    # bmag_min, bmag_min_id = torch.min(bmag, dim=-1) # result shape (batchshape)
 
-    return bmag_min
+    return bmag
 
 
 def reconstruct_beam_matrix(k, beamsize_squared, q_len, rmat, thick=True):

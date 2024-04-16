@@ -1,5 +1,5 @@
 import torch
-from emitopt.plot_utils import plot_valid_thick_quad_fits
+from emitopt.visualize import plot_valid_thick_quad_fits
 from emitopt.modeling import get_virtual_meas_scans
 from emitopt.beam_dynamics import reconstruct_beam_matrix, compute_bmag
 

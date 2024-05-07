@@ -453,9 +453,12 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
 
         xx = torch.meshgrid(*linspace_list, indexing="ij")
         mesh_pts = torch.stack(xx).flatten(start_dim=1).T
-
+                
+         # add dummy (zeros) column for measurement parameter
+        x = torch.cat((mesh_pts[:,:self.meas_dim], torch.zeros(mesh_pts.shape[0],1), mesh_pts[:,self.meas_dim:]), dim=1)
+        
         # evaluate the function on grid points
-        objective, emit, bmag, is_valid, validity_rate, bss = self.evaluate_objective(model, mesh_pts, bounds,
+        objective, emit, bmag, is_valid, validity_rate, bss = self.evaluate_objective(model, x, bounds,
                                                             tkwargs=tkwargs, n_samples=self.n_samples)
         
         if self.x_key and self.y_key:
@@ -488,9 +491,6 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
             "x_tuning_best": best_x,
             "emit_best": emit_best,
         }
-    
-
-
         return xs_exe, ys_exe, results_dict
 
     def get_meas_scan_inputs(self, x_tuning: Tensor, bounds: Tensor, tkwargs: dict=None):
@@ -499,9 +499,10 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         configurations specified by x_tuning.
 
         Parameters:
-            x_tuning: a tensor of shape n_points x n_tuning_dims, where each row specifies a tuning
+            x_tuning: a tensor of shape batchshape x n_tuning_dims 
+                        (ex: batchshape = n_samples x n_tuning_configs), 
+                        where each row specifies a tuning
                         configuration where we want to do an emittance scan.
-                        >>batchshape x n_tuning_configs x n_tuning_dims (ex: batchshape = n_samples x n_tuning_configs)
         Returns:
             xs: tensor, shape (n_tuning_configs*n_steps_meas_scan) x d,
                 where n_tuning_configs = x_tuning.shape[0],
@@ -519,17 +520,16 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         x_meas = torch.linspace(
             *bounds.T[self.meas_dim], self.n_steps_measurement_param, **tkwargs
         )
-        
+
         # prepare column of measurement scans coordinates
         x_meas_expanded = x_meas.reshape(-1,1).repeat(*x_tuning.shape[:-1],1)
-        
+
         # repeat tuning configs as necessary and concat with column from the line above
         # to make xs shape: (n_tuning_configs*n_steps_quad_scan) x d ,
         # where d is the full dimension of the model/posterior space (tuning & meas)
         x_tuning_expanded = torch.repeat_interleave(x_tuning, 
                                                     self.n_steps_measurement_param, 
                                                     dim=-2)
-
 
         x = torch.cat(
             (x_tuning_expanded[..., :self.meas_dim], x_meas_expanded, x_tuning_expanded[..., self.meas_dim:]), 
@@ -539,7 +539,22 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         return x
             
 
-    def evaluate_objective(self, model, x_tuning, bounds, tkwargs:dict=None, n_samples=10000, use_bmag=True):
+    def evaluate_objective(self, model, x, bounds, tkwargs:dict=None, n_samples=10000, use_bmag=True):
+        """
+        inputs:
+            model: a botorch ModelListGP
+            x_tuning: tensor shape n_points x n_dim specifying points in the full-dimensional model space
+                    at which to evaluate the objective.
+        returns: 
+            res: tensor shape n_points x 1
+            emit: tensor shape n_points x 1 or 2
+            bmag: tensor shape n_points x 1 or 2
+        """
+        tuning_idxs = torch.arange(bounds.shape[1])
+        tuning_idxs = tuning_idxs[tuning_idxs!=self.meas_dim] # remove measurement dim index
+        x_tuning = x[...,tuning_idxs]
+        
+        # x_tuning must be shape n_tuning_configs x n_tuning_dims
         emit, bmag, is_valid, validity_rate, bss = self.evaluate_posterior_emittance_samples(model, 
                                                                                              x_tuning, 
                                                                                              bounds, 
@@ -559,6 +574,14 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         return res, emit, bmag, is_valid, validity_rate, bss
 
     def evaluate_posterior_emittance_samples(self, model, x_tuning, bounds, tkwargs:dict=None, n_samples=10000):
+        """
+        inputs:
+            x_tuning: tensor shape n_points x n_dim specifying points in the full-dimensional model space
+                    at which to evaluate the objective.
+        returns: 
+            emit: tensor shape n_points x 1 or 2
+            bmag: tensor shape n_points x 1 or 2
+        """
         # x_tuning must be shape n_tuning_configs x n_tuning_dims
         tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
         x = self.get_meas_scan_inputs(x_tuning, bounds, tkwargs) # result shape n_tuning_configs*n_steps x ndim
@@ -601,14 +624,14 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
             k_x = (x[..., self.meas_dim] * self.scale_factor) # n_samples x n_tuning x n_steps
             k_y = k_x * -1. # n_samples x n_tuning x n_steps
             k = torch.cat((k_x, k_y)) # shape (2*n_samples x n_tuning x n_steps)
-            
+
             beamsize_squared = torch.cat((bss[...,0], bss[...,1])) 
             # shape (2*n_samples x n_tuning x n_steps)
 
             rmat_x = self.rmat_x.to(**tkwargs).repeat(*bss.shape[:2],1,1)
             rmat_y = self.rmat_y.to(**tkwargs).repeat(*bss.shape[:2],1,1)
             rmat = torch.cat((rmat_x, rmat_y)) # shape (2*n_samples x n_tuning x 2 x 2)
-            
+
             beta0_x = self.twiss0_x[0].repeat(*bss.shape[:2], 1)
             beta0_y = self.twiss0_y[0].repeat(*bss.shape[:2], 1)
             beta0 = torch.cat((beta0_x, beta0_y))

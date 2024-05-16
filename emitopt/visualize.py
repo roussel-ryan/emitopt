@@ -442,12 +442,18 @@ def plot_virtual_emittance(optimizer, reference_point, dim='xy', ci=0.95, n_poin
         x_scan = torch.linspace(*tuning_domain[i], n_points, **tkwargs)
         x_tuning = x_origin.repeat(n_points, 1)
         x_tuning[:,i] = x_scan
-        objective, emit, bmag, is_valid, validity_rate, bss = algorithm.evaluate_objective(bax_model, 
-                                                                                   x_tuning, 
-                                                                                   bounds,
-                                                                                   tkwargs,
-                                                                                   n_samples,
-                                                                                   use_bmag=use_bmag)
+        objective = algorithm.evaluate_virtual_objective(bax_model, 
+                                               x_tuning, 
+                                               bounds,
+                                               tkwargs,
+                                               n_samples,
+                                               use_bmag=use_bmag)
+        emit = algorithm.results["emit"]
+        bmag = algorithm.results["bmag"]
+        is_valid = algorithm.results["is_valid"]
+        validity_rate = algorithm.results["validity_rate"]
+        bss = algorithm.results["bss"]
+        
 
         if algorithm.x_key and algorithm.y_key:
             emit = (emit[...,0] * emit[...,1]).sqrt()

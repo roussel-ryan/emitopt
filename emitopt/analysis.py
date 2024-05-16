@@ -2,21 +2,23 @@ import torch
 from emitopt.visualize import plot_valid_thick_quad_fits
 from emitopt.modeling import get_virtual_meas_scans
 from emitopt.beam_dynamics import reconstruct_beam_matrix, compute_bmag
-
+from torch import Tensor
+from numpy import ndarray
+from typing import List, Dict, Optional, Tuple, Union
 
 def compute_emit_bayesian(
-    k,
-    beamsize,
-    q_len,
-    rmat,
-    beta0=None,
-    alpha0=None,
-    n_samples=10000,
-    n_steps_quad_scan=10,
+    k: ndarray,
+    beamsize: ndarray,
+    q_len: float,
+    rmat: ndarray,
+    beta0: float=None,
+    alpha0: float=None,
+    n_samples: int=10000,
+    n_steps_quad_scan: int=10,
     covar_module=None,
     noise_prior=None,
-    visualize=False,
-    tkwargs=None,
+    visualize: bool=False,
+    tkwargs: dict=None,
 ):
     """
     Produces a distribution of possible (physically valid) emittance values corresponding
@@ -36,14 +38,14 @@ def compute_emit_bayesian(
 
         q_len: float defining the (longitudinal) quadrupole length or "thickness" in [m]
                     
-        rmat: tensor containing the (fixed) 2x2 R matrix describing the transport from the end of the 
+        rmat: numpy array containing the (fixed) 2x2 R matrix describing the transport from the end of the 
                 measurement quad to the observation screen.
                 
-        beta0: the design beta twiss parameter at the screen
+        beta0: float, the design beta twiss parameter at the screen
         
-        alpha0: the design alpha twiss parameter at the screen
+        alpha0: float, the design alpha twiss parameter at the screen
         
-        n_samples: the number of virtual measurement scan samples to evaluate for our "Bayesian" estimate
+        n_samples: int, the number of virtual measurement scan samples to evaluate for our "Bayesian" estimate
 
         n_steps_quad_scan: the number of steps in our virtual measurement scans
 
@@ -56,12 +58,12 @@ def compute_emit_bayesian(
         tkwargs: dict containing the tensor device and dtype
 
     Returns:
-        emits_valid: a tensor of physically valid emittance results from sampled measurement scans.
+        emit: a tensor of physically valid emittance results from sampled measurement scans.
 
-        bmag_valid: (n_valid_scans x 1) containing the bmag corresponding to the optimal point 
+        bmag: tensor shape (n_valid_scans x 1) containing the bmag corresponding to the optimal point 
                         from each physically valid fit.
 
-        sig_valid: tensor, shape (n_valid_scans x 3 x 1), containing the computed 
+        sig: tensor, shape (n_valid_scans x 3 x 1), containing the computed 
                         sig11, sig12, sig22 corresponding to each physically valid
                         fit.
 
@@ -72,6 +74,7 @@ def compute_emit_bayesian(
 
     k = torch.tensor(k, **tkwargs)
     beamsize = torch.tensor(beamsize, **tkwargs)
+    rmat = torch.tensor(rmat, **tkwargs)
 
     k_virtual, bss_virtual = get_virtual_meas_scans(
         k=k,
@@ -112,7 +115,13 @@ def compute_emit_bayesian(
     return emit, bmag, sig, sample_validity_rate
 
 
-def compute_emit_bmag(k, beamsize_squared, q_len, rmat, beta0=None, alpha0=None, thick=True):
+def compute_emit_bmag(k: Tensor, 
+                      beamsize_squared: Tensor, 
+                      q_len: float, 
+                      rmat: Tensor, 
+                      beta0: float=None, 
+                      alpha0: float=None, 
+                      thick: bool=True):
     """
     Computes the emittance(s) corresponding to a set of quadrupole measurement scans
     using a thick OR thin quad model.

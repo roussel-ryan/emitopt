@@ -418,6 +418,8 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         description="Whether to use thick-quad (or thin, if False) transport for emittance calc")
     n_grid_points: int = Field(10,
         description="Number of points in each grid dimension. Only used if method='Grid'.")
+    results: dict = Field({},
+        description="Dictionary to store results from emittance calculcation")
 
     @property
     def observable_names_ordered(self) -> list:  
@@ -458,16 +460,16 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         x = torch.cat((mesh_pts[:,:self.meas_dim], torch.zeros(mesh_pts.shape[0],1), mesh_pts[:,self.meas_dim:]), dim=1)
         
         # evaluate the function on grid points
-        objective, emit, bmag, is_valid, validity_rate, bss = self.evaluate_objective(model, x, bounds,
+        objective = self.evaluate_virtual_objective(model, x, bounds,
                                                             tkwargs=tkwargs, n_samples=self.n_samples)
         
         if self.x_key and self.y_key:
-            emit = (emit[...,0] * emit[...,1]).sqrt()
-            bmag = (bmag[...,0] * bmag[...,1]).sqrt()
+            emit = (self.results["emit"][...,0] * self.results["emit"][...,1]).sqrt()
+            bmag = (self.results["bmag"][...,0] * self.results["bmag"][...,1]).sqrt()
             bmag_min, bmag_min_id = torch.min(bmag, dim=-1)
         else:
-            emit = emit.squeeze(-1)
-            bmag = bmag.squeeze(-1)
+            emit = self.results["emit"].squeeze(-1)
+            bmag = self.results["bmag"].squeeze(-1)
             bmag_min, bmag_min_id = torch.min(bmag, dim=-1)
 
         objective = torch.nan_to_num(objective, float('inf'))
@@ -480,7 +482,7 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         
         # is there a way to avoid this for loop? probably
         for sample_id in range(self.n_samples):
-            ys_exe = torch.cat((ys_exe, torch.index_select(bss[sample_id], dim=0, index=best_id[sample_id])), dim=0)
+            ys_exe = torch.cat((ys_exe, torch.index_select(self.results["bss"][sample_id], dim=0, index=best_id[sample_id])), dim=0)
             emit_best = torch.cat((emit_best, torch.index_select(emit[sample_id], dim=0, index=best_id[sample_id])), dim=0)
 
         emit_best = emit_best.reshape(self.n_samples, 1)
@@ -539,7 +541,7 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         return x
             
 
-    def evaluate_objective(self, model, x, bounds, tkwargs:dict=None, n_samples=10000, use_bmag=True):
+    def evaluate_virtual_objective(self, model, x, bounds, tkwargs:dict=None, n_samples=10000, use_bmag=True):
         """
         inputs:
             model: a botorch ModelListGP
@@ -560,6 +562,12 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
                                                                                              bounds, 
                                                                                              tkwargs, 
                                                                                              n_samples)
+        self.results["emit"] = emit
+        self.results["bmag"] = bmag
+        self.results["is_valid"] = is_valid
+        self.results["validity_rate"] = validity_rate
+        self.results["bss"] = bss
+        
         if self.x_key and self.y_key:
             res = (emit[...,0] * emit[...,1]).sqrt()
             if use_bmag:
@@ -571,7 +579,7 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
             if use_bmag:
                 bmag_min, bmag_min_id = torch.min(bmag, dim=-2) # NEED TO CHECK THIS DIM
                 res = (bmag_min * res).squeeze(-1)
-        return res, emit, bmag, is_valid, validity_rate, bss
+        return res
 
     def evaluate_posterior_emittance_samples(self, model, x_tuning, bounds, tkwargs:dict=None, n_samples=10000):
         """

@@ -412,7 +412,7 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         description="index identifying the measurement quad dimension in the model"
     )
     n_steps_measurement_param: int = Field(
-        11, description="number of steps to use in the virtual measurement scans"
+        3, description="number of steps to use in the virtual measurement scans"
     )
     thick_quad: bool = Field(True,
         description="Whether to use thick-quad (or thin, if False) transport for emittance calc")
@@ -541,7 +541,7 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         return x
             
 
-    def evaluate_virtual_objective(self, model, x, bounds, tkwargs:dict=None, n_samples=10000, use_bmag=True):
+    def evaluate_virtual_objective(self, model, x, bounds, tkwargs:dict=None, n_samples=10000, use_mean=False, use_bmag=True):
         """
         inputs:
             model: a botorch ModelListGP
@@ -557,11 +557,12 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         x_tuning = x[...,tuning_idxs]
         
         # x_tuning must be shape n_tuning_configs x n_tuning_dims
-        emit, bmag, is_valid, validity_rate, bss = self.evaluate_posterior_emittance_samples(model, 
-                                                                                             x_tuning, 
-                                                                                             bounds, 
-                                                                                             tkwargs, 
-                                                                                             n_samples)
+        emit, bmag, is_valid, validity_rate, bss = self.evaluate_posterior_emittance(model, 
+                                                                                     x_tuning, 
+                                                                                     bounds, 
+                                                                                     tkwargs, 
+                                                                                     n_samples,
+                                                                                     use_mean)
         self.results["emit"] = emit
         self.results["bmag"] = bmag
         self.results["is_valid"] = is_valid
@@ -581,10 +582,10 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
                 res = (bmag_min * res).squeeze(-1)
         return res
 
-    def evaluate_posterior_emittance_samples(self, model, x_tuning, bounds, tkwargs:dict=None, n_samples=10000):
+    def evaluate_posterior_emittance(self, model, x_tuning, bounds, tkwargs:dict=None, n_samples=100, use_mean=False):
         """
         inputs:
-            x_tuning: tensor shape n_points x n_dim specifying points in the full-dimensional model space
+            x_tuning: tensor shape n_points x (n_dim-1) specifying points in the **tuning** space
                     at which to evaluate the objective.
         returns: 
             emit: tensor shape n_points x 1 or 2
@@ -596,17 +597,21 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         
         if isinstance(model, ModelList):
             assert len(x_tuning.shape)==2
-            p = model.posterior(x) 
-            bss = p.sample(torch.Size([n_samples])) # result shape n_samples x n_tuning_configs*n_steps x num_outputs (1 or 2)
+            p = model.posterior(x)
+            if use_mean:
+                bss = p.mean
+                bss = bss.reshape(1, x_tuning.shape[0], self.n_steps_measurement_param, -1)
+                x = x.reshape(1, x_tuning.shape[0], self.n_steps_measurement_param, -1) # result n_tuning_configs x n_steps x ndim
+            else:
+                bss = p.sample(torch.Size([n_samples])) # result shape n_samples x n_tuning_configs*n_steps x num_outputs (1 or 2)
 
-            x = x.reshape(x_tuning.shape[0], self.n_steps_measurement_param, -1) # result n_tuning_configs x n_steps x ndim
-            x = x.repeat(n_samples,1,1,1) 
-            # result shape n_samples x n_tuning_configs x n_steps x ndim
-            bss = bss.reshape(n_samples, x_tuning.shape[0], self.n_steps_measurement_param, -1)
-            # result shape n_samples x n_tuning_configs x n_steps x num_outputs (1 or 2)
+                x = x.reshape(x_tuning.shape[0], self.n_steps_measurement_param, -1) # result n_tuning_configs x n_steps x ndim
+                x = x.repeat(n_samples,1,1,1) 
+                # result shape n_samples x n_tuning_configs x n_steps x ndim
+                bss = bss.reshape(n_samples, x_tuning.shape[0], self.n_steps_measurement_param, -1)
+                # result shape n_samples x n_tuning_configs x n_steps x num_outputs (1 or 2)
         else:
-            # assert x_tuning.shape[0]==self.n_samples
-            assert x_tuning.shape[0]==1
+            assert x_tuning.shape[0]==model[0].n_samples
             beamsize_squared_list = [sample_funcs(x).reshape(*x_tuning.shape[:-1], self.n_steps_measurement_param)
                                      for sample_funcs in model]
             # each tensor in beamsize_squared (list) will be shape n_samples x n_tuning_configs x n_steps
@@ -615,7 +620,7 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
             # n_samples x n_tuning_configs x n_steps x ndim
             bss = torch.stack(beamsize_squared_list, dim=-1) 
             # result shape n_samples x n_tuning_configs x n_steps x num_outputs (1 or 2)
-            
+        
         if self.x_key and not self.y_key:
             k = x[..., self.meas_dim] * self.scale_factor # n_samples x n_tuning x n_steps
             beamsize_squared = bss[...,0] # result shape n_samples x n_tuning x n_steps
@@ -634,6 +639,8 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
             k = torch.cat((k_x, k_y)) # shape (2*n_samples x n_tuning x n_steps)
 
             beamsize_squared = torch.cat((bss[...,0], bss[...,1])) 
+            # beamsize_squared = torch.clamp(beamsize_squared, min=1e-1)
+            beamsize_squared = beamsize_squared + 5
             # shape (2*n_samples x n_tuning x n_steps)
 
             rmat_x = self.rmat_x.to(**tkwargs).repeat(*bss.shape[:2],1,1)
@@ -891,7 +898,7 @@ class ScipyBeamAlignment(Algorithm, ABC):
 
             x_tuning_flat: a FLATTENED tensor formerly of shape (n_samples x ndim) where the nth
                             row defines a point in tuning-parameter space at which to evaluate the
-                            misalignment of the nth posterior pathwise sample given by post_paths
+                            misalignment of the nth posterior pathwise samples given by sample_funcs_list
 
             NOTE: x_tuning_flat must be 1d (flattened) so the output of this function can be minimized
                     with scipy minimization routines (that expect a 1d vector of inputs)

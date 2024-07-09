@@ -666,10 +666,10 @@ def plot_virtual_measurement_scan(optimizer, reference_point, n_samples=50):
                             for name in optimizer.generator.algorithm.observable_names_ordered]
     bax_model = model.subset_output(bax_model_ids)
 
-    emit, bmag, is_valid, validity_rate, bss = optimizer.generator.algorithm.evaluate_posterior_emittance_samples(bax_model,
-                                                                                                                          x_tuning,
-                                                                                                                          bounds,
-                                                                                                                         n_samples=n_samples)
+    emit, bmag, is_valid, validity_rate, bss = optimizer.generator.algorithm.evaluate_posterior_emittance(bax_model,
+                                                                                                          x_tuning,
+                                                                                                          bounds,
+                                                                                                         n_samples=n_samples)
     
     bss = bss.reshape(n_samples, n_steps_measurement_param, -1)
     

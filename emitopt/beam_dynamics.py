@@ -139,7 +139,7 @@ def build_quad_rmat(k, q_len, thick=True):
              )
                        
     else:
-        c, s, cp, sp = (torch.ones_like(k), torch.zeros_like(k), -k.abs()*q_len, torch.ones_like(k))
+        c, s, cp, sp = (torch.ones_like(k), torch.zeros_like(k), -k*q_len, torch.ones_like(k))
         
     result = torch.stack((
         torch.stack((c, s), dim=-1), 

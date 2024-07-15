@@ -455,7 +455,7 @@ def plot_pathwise_emittance_vs_tuning(optimizer, x_origin, sample_ids=None, tkwa
     return fig, axs
 
 
-def plot_virtual_emittance_vs_tuning(optimizer, x_origin, ci=0.95, tkwargs:dict=None, n_samples=10000):
+def plot_virtual_emittance(optimizer, x_origin, ci=0.95, tkwargs:dict=None, n_points = 100, n_samples=10000):
     """
     Plots the emittance cross-sections corresponding to the GP posterior beam size model. 
     This function uses n_samples to produce a confidence interval.
@@ -486,8 +486,8 @@ def plot_virtual_emittance_vs_tuning(optimizer, x_origin, ci=0.95, tkwargs:dict=
         
     for i in range(n_tuning_dims):
         # do a scan of the posterior emittance (via valid sampling)
-        x_scan = torch.linspace(*tuning_domain[i], 100, **tkwargs)
-        x_tuning = x_origin.repeat(100, 1)
+        x_scan = torch.linspace(*tuning_domain[i], n_points, **tkwargs)
+        x_tuning = x_origin.repeat(n_points, 1)
         x_tuning[:,i] = x_scan
         emit, is_valid, validity_rate = algorithm.evaluate_posterior_emittance_samples(bax_model, 
                                                                                    x_tuning, 

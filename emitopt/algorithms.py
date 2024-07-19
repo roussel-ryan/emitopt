@@ -412,12 +412,14 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         description="index identifying the measurement quad dimension in the model"
     )
     n_steps_measurement_param: int = Field(
-        11, description="number of steps to use in the virtual measurement scans"
+        3, description="number of steps to use in the virtual measurement scans"
     )
     thick_quad: bool = Field(True,
         description="Whether to use thick-quad (or thin, if False) transport for emittance calc")
     n_grid_points: int = Field(10,
         description="Number of points in each grid dimension. Only used if method='Grid'.")
+    use_bmag: bool = Field(True,
+        description="Whether to multiply the emit by the bmag to get virtual objective.")
     results: dict = Field({},
         description="Dictionary to store results from emittance calculcation")
 
@@ -461,7 +463,7 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         
         # evaluate the function on grid points
         objective = self.evaluate_virtual_objective(model, x, bounds,
-                                                            tkwargs=tkwargs, n_samples=self.n_samples)
+                                                            tkwargs=tkwargs, n_samples=self.n_samples, use_bmag=self.use_bmag)
         
         if self.x_key and self.y_key:
             emit = (self.results["emit"][...,0] * self.results["emit"][...,1]).sqrt()
@@ -541,7 +543,7 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         return x
             
 
-    def evaluate_virtual_objective(self, model, x, bounds, tkwargs:dict=None, n_samples=10000, use_bmag=True):
+    def evaluate_virtual_objective(self, model, x, bounds, tkwargs:dict=None, n_samples=10000, use_mean=False, use_bmag=True):
         """
         inputs:
             model: a botorch ModelListGP
@@ -557,11 +559,12 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         x_tuning = x[...,tuning_idxs]
         
         # x_tuning must be shape n_tuning_configs x n_tuning_dims
-        emit, bmag, is_valid, validity_rate, bss = self.evaluate_posterior_emittance_samples(model, 
-                                                                                             x_tuning, 
-                                                                                             bounds, 
-                                                                                             tkwargs, 
-                                                                                             n_samples)
+        emit, bmag, is_valid, validity_rate, bss = self.evaluate_posterior_emittance(model, 
+                                                                                     x_tuning, 
+                                                                                     bounds, 
+                                                                                     tkwargs, 
+                                                                                     n_samples,
+                                                                                     use_mean)
         self.results["emit"] = emit
         self.results["bmag"] = bmag
         self.results["is_valid"] = is_valid
@@ -581,10 +584,10 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
                 res = (bmag_min * res).squeeze(-1)
         return res
 
-    def evaluate_posterior_emittance_samples(self, model, x_tuning, bounds, tkwargs:dict=None, n_samples=10000):
+    def evaluate_posterior_emittance(self, model, x_tuning, bounds, tkwargs:dict=None, n_samples=100, use_mean=False):
         """
         inputs:
-            x_tuning: tensor shape n_points x n_dim specifying points in the full-dimensional model space
+            x_tuning: tensor shape n_points x (n_dim-1) specifying points in the **tuning** space
                     at which to evaluate the objective.
         returns: 
             emit: tensor shape n_points x 1 or 2
@@ -596,17 +599,21 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         
         if isinstance(model, ModelList):
             assert len(x_tuning.shape)==2
-            p = model.posterior(x) 
-            bss = p.sample(torch.Size([n_samples])) # result shape n_samples x n_tuning_configs*n_steps x num_outputs (1 or 2)
+            p = model.posterior(x)
+            if use_mean:
+                bss = p.mean
+                bss = bss.reshape(1, x_tuning.shape[0], self.n_steps_measurement_param, -1)
+                x = x.reshape(1, x_tuning.shape[0], self.n_steps_measurement_param, -1) # result n_tuning_configs x n_steps x ndim
+            else:
+                bss = p.sample(torch.Size([n_samples])) # result shape n_samples x n_tuning_configs*n_steps x num_outputs (1 or 2)
 
-            x = x.reshape(x_tuning.shape[0], self.n_steps_measurement_param, -1) # result n_tuning_configs x n_steps x ndim
-            x = x.repeat(n_samples,1,1,1) 
-            # result shape n_samples x n_tuning_configs x n_steps x ndim
-            bss = bss.reshape(n_samples, x_tuning.shape[0], self.n_steps_measurement_param, -1)
-            # result shape n_samples x n_tuning_configs x n_steps x num_outputs (1 or 2)
+                x = x.reshape(x_tuning.shape[0], self.n_steps_measurement_param, -1) # result n_tuning_configs x n_steps x ndim
+                x = x.repeat(n_samples,1,1,1) 
+                # result shape n_samples x n_tuning_configs x n_steps x ndim
+                bss = bss.reshape(n_samples, x_tuning.shape[0], self.n_steps_measurement_param, -1)
+                # result shape n_samples x n_tuning_configs x n_steps x num_outputs (1 or 2)
         else:
-            # assert x_tuning.shape[0]==self.n_samples
-            assert x_tuning.shape[0]==1
+            assert x_tuning.shape[0]==model[0].n_samples
             beamsize_squared_list = [sample_funcs(x).reshape(*x_tuning.shape[:-1], self.n_steps_measurement_param)
                                      for sample_funcs in model]
             # each tensor in beamsize_squared (list) will be shape n_samples x n_tuning_configs x n_steps
@@ -615,7 +622,7 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
             # n_samples x n_tuning_configs x n_steps x ndim
             bss = torch.stack(beamsize_squared_list, dim=-1) 
             # result shape n_samples x n_tuning_configs x n_steps x num_outputs (1 or 2)
-            
+        
         if self.x_key and not self.y_key:
             k = x[..., self.meas_dim] * self.scale_factor # n_samples x n_tuning x n_steps
             beamsize_squared = bss[...,0] # result shape n_samples x n_tuning x n_steps
@@ -633,7 +640,16 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
             k_y = k_x * -1. # n_samples x n_tuning x n_steps
             k = torch.cat((k_x, k_y)) # shape (2*n_samples x n_tuning x n_steps)
 
-            beamsize_squared = torch.cat((bss[...,0], bss[...,1])) 
+            beamsize_squared = torch.cat((bss[...,0], bss[...,1]))
+
+            # FUDGE FOR PHYSICALITY (in development)
+            # m0, m1 = model.models
+            # beamsize_squared = torch.cat((
+            #     bss[...,0].clamp(min=m0.outcome_transform.untransform(m0.train_targets)[0].min()), 
+            #     bss[...,1].clamp(min=m1.outcome_transform.untransform(m1.train_targets)[0].min())
+            #                     ))
+            # print(beamsize_squared)
+            # beamsize_squared = beamsize_squared.clamp(min=1.e-6)
             # shape (2*n_samples x n_tuning x n_steps)
 
             rmat_x = self.rmat_x.to(**tkwargs).repeat(*bss.shape[:2],1,1)
@@ -671,6 +687,55 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         #shape n_tuning_configs
         
         return emit, bmag, is_valid, validity_rate, bss
+
+from scipy.optimize import differential_evolution
+class DifferentialEvolutionEmitBmag(GridMinimizeEmitBmag):
+    def get_execution_paths(self, model: ModelList, bounds: Tensor, tkwargs=None, verbose=False):
+        if not (self.x_key or self.y_key):
+            raise ValueError("must provide a key for x, y, or both.")
+        if (self.x_key and self.rmat_x is None) or (self.y_key and self.rmat_y is None):
+            raise ValueError("must provide rmat for each transverse dimension (x/y) being modeled.")
+    
+        tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
+        opt_bounds = bounds.T
+        opt_bounds[self.meas_dim] = torch.tensor([0,0])
+        print(opt_bounds)
+
+        x_exe = torch.tensor([])
+        y_exe = torch.tensor([])
+        cpu_models = [copy.deepcopy(m).cpu() for m in model.models]
+        for s in range(self.n_samples):
+            sample_funcs_list = [draw_product_kernel_post_paths(m, n_samples=1) for m in cpu_models]
+                
+            def wrapped_virtual_objective(x):
+                x = torch.from_numpy(x)
+                res = self.evaluate_virtual_objective(sample_funcs_list, x.T.unsqueeze(0), bounds, use_bmag=self.use_bmag)
+                return res[0,:].numpy()
+            
+            res = differential_evolution(wrapped_virtual_objective, bounds=opt_bounds.numpy(), vectorized=True, polish=False, popsize=50, maxiter=10, seed=1)
+            best_x =torch.from_numpy(res.x)
+            best_x_tuning = best_x[torch.arange(best_x.shape[0])!=self.meas_dim].reshape(1,1,-1)
+            best_meas_scan_x = self.get_meas_scan_inputs(best_x_tuning, bounds)
+            best_meas_scan_y = torch.vstack([sample_func(best_meas_scan_x) for sample_func in sample_funcs_list]).T.unsqueeze(0)
+            x_exe = torch.cat((x_exe, best_meas_scan_x))
+            y_exe = torch.cat((y_exe, best_meas_scan_y))
+
+
+            from matplotlib import pyplot as plt
+            x = torch.from_numpy(res.x).repeat(100,1)
+            x[:,0] = torch.linspace(-2, 1, 100)
+            x = x.repeat(1, 1, 1)
+            vobj = self.evaluate_virtual_objective(sample_funcs_list, x, bounds)
+            
+            plt.plot(x[:,:,0].T, vobj.T, c='C0')
+            plt.scatter([res.x[0]], [res.fun], c='r', marker='x')
+            plt.show()
+    
+            print(best_x_tuning)
+
+        self.results['sample_funcs_list'] = sample_funcs_list
+
+        return x_exe, y_exe, {}
 
 class ScipyBeamAlignment(Algorithm, ABC):
     name = "ScipyBeamAlignment"
@@ -804,11 +869,34 @@ class ScipyBeamAlignment(Algorithm, ABC):
         }
 
         return xs_exe, ys_exe, results_dict
-        
+
+    def evaluate_virtual_objective(self, model, x, bounds, n_samples=100, tkwargs:dict=None, use_mean=False):
+        meas_scans = torch.index_select(
+            bounds.T, dim=0, index=torch.tensor(self.meas_dims)
+        )
+        ndim = bounds.shape[1]
+        tuning_dims = [i for i in range(ndim) if i not in self.meas_dims]
+        x_tuning = torch.index_select(
+            x, dim=-1, index=torch.tensor(tuning_dims)
+        )
+        if isinstance(model, ModelList):
+            x_tuning = x_tuning.unsqueeze(1)
+            xs = self.get_meas_scan_inputs(x_tuning, meas_scans, self.meas_dims)
+            p = model.posterior(xs)
+            ys = p.sample(torch.Size([n_samples])) # shape n_samples x(n_meas_dims + 1) x (1 or 2) (2 if x&y)
+            rise = ys[...,1:,:] - ys[...,0:1,:] # shape n_samples x n_points x n_meas_scans x 1 or 2
+            run = (meas_scans[:, 1] - meas_scans[:, 0]).reshape(-1,1).repeat(*rise.shape[:-2],1,rise.shape[-1]) # same shape as rise
+            slope = rise/run
+            misalignment = slope.pow(2).sum(dim=-1).sum(dim=-1,keepdim=True) # shape n_samples x n_points
+        else:
+            # TODO: add sample func list evaluation
+            pass
+        return misalignment
+
     def sample_funcs_misalignment(
         self,
         sample_funcs_list,
-        x_tuning,  # n x d tensor
+        x_tuning,  # n_samples x 1 x d tensor
         meas_dims,  # list of integers
         meas_scans,  # tensor of measurement device(s) scan inputs, shape: len(meas_dims) x 2
     ):
@@ -820,7 +908,7 @@ class ScipyBeamAlignment(Algorithm, ABC):
         arguments:
             sample_funcs_list: a list of pathwise posterior samples for x, y, or both 
                         from a SingleTaskGP model of the beam centroid positions (assumes Linear ProductKernel)
-            x_tuning: a tensor of shape (n_samples x n_tuning_dims) where the nth row defines a point in
+            x_tuning: a tensor of shape (n_samples x 1 x n_tuning_dims) where the nth entry defines a point in
                         tuning-parameter space at which to evaluate the misalignment of the nth
                         posterior pathwise sample given by post_paths
             meas_dims: the dimension indeces of our model that describe the quadrupole measurement devices
@@ -838,7 +926,6 @@ class ScipyBeamAlignment(Algorithm, ABC):
                 linear output for each dimension).
         """
         xs = self.get_meas_scan_inputs(x_tuning, meas_scans, meas_dims)
-
         sample_misalignments_sum_list = [] # list to store the sum of the samplewise misalignments in x, y or both
         sample_ys_list = [] # list to store the centroid positions for x, y or both
         for sample_func in sample_funcs_list:
@@ -891,7 +978,7 @@ class ScipyBeamAlignment(Algorithm, ABC):
 
             x_tuning_flat: a FLATTENED tensor formerly of shape (n_samples x ndim) where the nth
                             row defines a point in tuning-parameter space at which to evaluate the
-                            misalignment of the nth posterior pathwise sample given by post_paths
+                            misalignment of the nth posterior pathwise samples given by sample_funcs_list
 
             NOTE: x_tuning_flat must be 1d (flattened) so the output of this function can be minimized
                     with scipy minimization routines (that expect a 1d vector of inputs)

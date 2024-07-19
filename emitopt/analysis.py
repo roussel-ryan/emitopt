@@ -155,9 +155,8 @@ def compute_emit_bmag(k: Tensor,
     """
     # get initial sigma 
     sig, total_rmats = reconstruct_beam_matrix(k, beamsize_squared, q_len, rmat, thick=thick)
-    
     emit = torch.sqrt(sig[...,0,0]*sig[...,2,0] - sig[...,1,0]**2) # result shape (batchshape)
-    
+
     # check sigma matrix and emit for physical validity
     is_valid = torch.logical_and(sig[...,0,0] > 0, sig[...,2,0] > 0) # result batchshape
     is_valid = torch.logical_and(is_valid, ~torch.isnan(emit)) # result batchshape

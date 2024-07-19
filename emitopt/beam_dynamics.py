@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from scipy.optimize import minimize
+# from torchmin import minimize
 
 def compute_bmag(sig, emit, total_rmats, beta0, alpha0):
     """
@@ -105,9 +106,20 @@ def fit_sigma(amat, beamsize_squared):
         )
     def fit_error_numpy(params):
         return fit_error(torch.from_numpy(params)).detach().numpy()
-        
-    init_params = np.tile(np.array([1.,1.,0.]), np.prod(beamsize_squared.shape[:-2]))
+
     eps = 1.e-6
+
+    # get initial guesses for lambda1, lambda2, c, from pseudo-inverse method
+    init_sig = amat.pinverse() @ beamsize_squared
+    lambda1 = init_sig[...,0,0].clamp(min=eps).sqrt()
+    lambda2 = init_sig[...,2,0].clamp(min=eps).sqrt()
+    c = (init_sig[...,1,0]/(lambda1*lambda2)).clamp(min=-1+eps, max=1-eps)
+    init_params = torch.stack((lambda1, lambda2, c), dim=-1).flatten().detach().numpy()
+                               
+    # # use fixed initial guess for lambda1, lambda2, c
+    # n_scans = np.prod(beamsize_squared.shape[:-2])
+    # init_params = np.tile(np.array([1.,1.,0.]), n_scans)
+    
     bounds = np.tile(np.array([[None, None], [None, None], [-1.+eps, 1.-eps]]), 
                      (np.prod(beamsize_squared.shape[:-2]), 1)
                     )
@@ -118,6 +130,15 @@ def fit_sigma(amat, beamsize_squared):
                    # options={'maxiter':100}
                   )
     fit_params = torch.from_numpy(res.x)
+
+    # res = minimize(fit_error, 
+    #                init_params, 
+    #                method = 'newton-cg',
+    #                # bounds=bounds,
+    #                # options={'maxiter':100}
+    #               )
+    # fit_params = res.x
+    
     fit_params = torch.reshape(fit_params, [*beamsize_squared.shape[:-2],3,1])
     fit_sig = torch.stack((fit_params[...,0,:]**2, 
                         # fit_params[...,0,:]*fit_params[...,1,:]*2/torch.pi*torch.arctan(fit_params[...,2,:]),        

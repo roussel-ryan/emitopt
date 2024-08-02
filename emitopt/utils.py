@@ -1,3 +1,4 @@
+import torch
 def get_quad_scale_factor(E, q_len):
     """
     A wrapper function that computes the sum of the samplewise misalignments for more convenient
@@ -1537,3 +1538,33 @@ def get_measurement_scan_inputs(x_tuning: dict, x_meas: dict) -> pd.DataFrame:
             df[meas_device] = meas_val
             df_meas_scans = pd.concat([df_meas_scans, df], ignore_index=True)
     return df_meas_scans
+
+def x_tuning_to_dict(generator, x_tuning):
+    """
+    Converts a single set of tuning parameters to a dictionary for input to Xopt
+    
+    x_tuning = tensor of shape (1, n_tuning_dims)
+    """
+    
+    tuning_parameter_names = [name for i, name in enumerate(generator.vocs.variable_names)
+                              if i != generator.algorithm.meas_dim]
+    x_tuning_dict = {}
+    for i in range(x_tuning.shape[1]):
+        x_tuning_dict[tuning_parameter_names[i]] = float(x_tuning[0,i])
+    return x_tuning_dict
+
+def x_tuning_to_tensor(generator, x_tuning_dict):
+    """
+    Converts a dict of tuning parameter settings to a tensor of shape (n_points, n_tuning_dims)
+    Each variable in x_tuning_dict must have the same number of values for concatenation.
+    """
+    x_tuning = torch.cat([torch.tensor(x_tuning_dict[name]).reshape(-1,1) 
+                          for i, name in enumerate(generator.vocs.variable_names)
+                          if i != generator.algorithm.meas_dim],
+                         dim=1)
+    return x_tuning
+
+def get_bax_optimum(generator):
+    x_tuning_best = generator.algorithm_results['x_tuning_best'].mean(dim=0)
+    x_tuning_dict = x_tuning_to_dict(generator, x_tuning_best)
+    return x_tuning_dict

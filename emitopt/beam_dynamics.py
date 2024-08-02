@@ -1,5 +1,7 @@
 import torch
-
+import numpy as np
+from scipy.optimize import minimize
+# from torchmin import minimize
 
 def compute_bmag(sig, emit, total_rmats, beta0, alpha0):
     """
@@ -33,9 +35,9 @@ def compute_bmag(sig, emit, total_rmats, beta0, alpha0):
     # result shape (batchshape x nsteps)
 
     # select minimum bmag from quad scan
-    bmag_min, bmag_min_id = torch.min(bmag, dim=-1) # result shape (batchshape)
+    # bmag_min, bmag_min_id = torch.min(bmag, dim=-1) # result shape (batchshape)
 
-    return bmag_min
+    return bmag
 
 
 def reconstruct_beam_matrix(k, beamsize_squared, q_len, rmat, thick=True):
@@ -73,12 +75,78 @@ def reconstruct_beam_matrix(k, beamsize_squared, q_len, rmat, thick=True):
     # amat result (batchshape x nsteps x 3)
 
     # get sigma matrix elements just before measurement quad from pseudo-inverse
-    sig = amat.pinverse() @ beamsize_squared.unsqueeze(-1).double()
+    # sig = amat.pinverse() @ beamsize_squared.unsqueeze(-1).double()
     # shapes (batchshape x 3 x nsteps) @ (batchshape x nsteps x 1)
+
+    # alternatively, get sigma elements using non-linear fitting with scipy.optimize.minimize
+    sig = fit_sigma(amat, beamsize_squared.unsqueeze(-1))
+    
     # result shape (batchshape x 3 x 1) containing column vectors of [sig11, sig12, sig22]
     
     return sig, total_rmats
 
+def fit_sigma(amat, beamsize_squared):
+    # nonlinear fitting using scipy/numpy
+    def fit_error(params):
+        params = torch.reshape(params, [*beamsize_squared.shape[:-2],3,1])
+        sig = torch.stack((params[...,0,:]**2, 
+                        # params[...,0,:]*params[...,1,:]*2/torch.pi*torch.arctan(params[...,2,:]), 
+                        params[...,0,:]*params[...,1,:]*params[...,2,:], 
+                        params[...,1,:]**2),
+                        dim=-2
+                        )
+        # sig should now be shape batchshape x 3 x 1
+        total_squared_error = (amat @ sig - beamsize_squared).pow(2).sum()
+        return total_squared_error
+    def fit_error_jacobian(params):
+        return(
+        torch.autograd.functional.jacobian(
+            fit_error, torch.from_numpy(params)
+        ).detach().numpy()
+        )
+    def fit_error_numpy(params):
+        return fit_error(torch.from_numpy(params)).detach().numpy()
+
+    eps = 1.e-6
+
+    # get initial guesses for lambda1, lambda2, c, from pseudo-inverse method
+    init_sig = amat.pinverse() @ beamsize_squared
+    lambda1 = init_sig[...,0,0].clamp(min=eps).sqrt()
+    lambda2 = init_sig[...,2,0].clamp(min=eps).sqrt()
+    c = (init_sig[...,1,0]/(lambda1*lambda2)).clamp(min=-1+eps, max=1-eps)
+    init_params = torch.stack((lambda1, lambda2, c), dim=-1).flatten().detach().numpy()
+                               
+    # # use fixed initial guess for lambda1, lambda2, c
+    # n_scans = np.prod(beamsize_squared.shape[:-2])
+    # init_params = np.tile(np.array([1.,1.,0.]), n_scans)
+    
+    bounds = np.tile(np.array([[None, None], [None, None], [-1.+eps, 1.-eps]]), 
+                     (np.prod(beamsize_squared.shape[:-2]), 1)
+                    )
+    res = minimize(fit_error_numpy, 
+                   init_params, 
+                   jac=fit_error_jacobian,
+                   bounds=bounds,
+                   # options={'maxiter':100}
+                  )
+    fit_params = torch.from_numpy(res.x)
+
+    # res = minimize(fit_error, 
+    #                init_params, 
+    #                method = 'newton-cg',
+    #                # bounds=bounds,
+    #                # options={'maxiter':100}
+    #               )
+    # fit_params = res.x
+    
+    fit_params = torch.reshape(fit_params, [*beamsize_squared.shape[:-2],3,1])
+    fit_sig = torch.stack((fit_params[...,0,:]**2, 
+                        # fit_params[...,0,:]*fit_params[...,1,:]*2/torch.pi*torch.arctan(fit_params[...,2,:]),        
+                        fit_params[...,0,:]*fit_params[...,1,:]*fit_params[...,2,:],        
+                        fit_params[...,1,:]**2),
+                        dim=-2
+                        )
+    return fit_sig
 
 def propagate_beam_quad_scan(sig_init, emit, rmat):
     """
@@ -125,8 +193,8 @@ def build_quad_rmat(k, q_len, thick=True):
             + torch.cosh(sqrt_k*q_len)*(k < 0) 
             + torch.ones_like(k)*(k == 0)
             )
-        s = (1./sqrt_k * torch.sin(sqrt_k*q_len)*(k > 0) 
-             + 1./sqrt_k * torch.sinh(sqrt_k*q_len)*(k < 0) 
+        s = (torch.nan_to_num(1./sqrt_k) * torch.sin(sqrt_k*q_len)*(k > 0) 
+             + torch.nan_to_num(1./sqrt_k) * torch.sinh(sqrt_k*q_len)*(k < 0) 
              + q_len*torch.ones_like(k)*(k == 0)
             )
         cp = (-sqrt_k * torch.sin(sqrt_k*q_len)*(k > 0) 

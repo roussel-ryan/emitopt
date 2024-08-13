@@ -422,7 +422,7 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
         description="Whether to multiply the emit by the bmag to get virtual objective.")
     results: dict = Field({},
         description="Dictionary to store results from emittance calculcation")
-
+    
     @property
     def observable_names_ordered(self) -> list:  
         # get observable model names in the order they appear in the model (ModelList)
@@ -690,6 +690,12 @@ class GridMinimizeEmitBmag(ScipyMinimizeEmittanceXY):
 
 from scipy.optimize import differential_evolution
 class DifferentialEvolutionEmitBmag(GridMinimizeEmitBmag):
+    popsize: int = Field(15,
+        description="Number of points sampled in each generation of evolutionary algorithm.")
+    maxiter: int = Field(10,
+        description="Max number of generations in the evolutionary algorithm.")
+    polish: bool = Field(False,
+        description="Whether to use gradient-based optimization after evolution to further optimize result.")
     def get_execution_paths(self, model: ModelList, bounds: Tensor, tkwargs=None, verbose=False):
         if not (self.x_key or self.y_key):
             raise ValueError("must provide a key for x, y, or both.")
@@ -697,14 +703,13 @@ class DifferentialEvolutionEmitBmag(GridMinimizeEmitBmag):
             raise ValueError("must provide rmat for each transverse dimension (x/y) being modeled.")
     
         tkwargs = tkwargs if tkwargs else {"dtype": torch.double, "device": "cpu"}
-        opt_bounds = bounds.T
+        opt_bounds = torch.clone(bounds.T)
         opt_bounds[self.meas_dim] = torch.tensor([0,0])
-        print(opt_bounds)
-
+        
         x_exe = torch.tensor([])
         y_exe = torch.tensor([])
         cpu_models = [copy.deepcopy(m).cpu() for m in model.models]
-        for s in range(self.n_samples):
+        for s in range(self.n_samples): # optimize samples sequentially
             sample_funcs_list = [draw_product_kernel_post_paths(m, n_samples=1) for m in cpu_models]
                 
             def wrapped_virtual_objective(x):
@@ -712,7 +717,13 @@ class DifferentialEvolutionEmitBmag(GridMinimizeEmitBmag):
                 res = self.evaluate_virtual_objective(sample_funcs_list, x.T.unsqueeze(0), bounds, use_bmag=self.use_bmag)
                 return res[0,:].numpy()
             
-            res = differential_evolution(wrapped_virtual_objective, bounds=opt_bounds.numpy(), vectorized=True, polish=False, popsize=50, maxiter=10, seed=1)
+            res = differential_evolution(wrapped_virtual_objective, 
+                                         bounds=opt_bounds.numpy(), 
+                                         vectorized=True, 
+                                         polish=False, 
+                                         popsize=self.popsize, 
+                                         maxiter=self.maxiter, 
+                                         seed=1)
             best_x =torch.from_numpy(res.x)
             best_x_tuning = best_x[torch.arange(best_x.shape[0])!=self.meas_dim].reshape(1,1,-1)
             best_meas_scan_x = self.get_meas_scan_inputs(best_x_tuning, bounds)
@@ -720,21 +731,7 @@ class DifferentialEvolutionEmitBmag(GridMinimizeEmitBmag):
             x_exe = torch.cat((x_exe, best_meas_scan_x))
             y_exe = torch.cat((y_exe, best_meas_scan_y))
 
-
-            from matplotlib import pyplot as plt
-            x = torch.from_numpy(res.x).repeat(100,1)
-            x[:,0] = torch.linspace(-2, 1, 100)
-            x = x.repeat(1, 1, 1)
-            vobj = self.evaluate_virtual_objective(sample_funcs_list, x, bounds)
-            
-            plt.plot(x[:,:,0].T, vobj.T, c='C0')
-            plt.scatter([res.x[0]], [res.fun], c='r', marker='x')
-            plt.show()
-    
             print(best_x_tuning)
-
-        self.results['sample_funcs_list'] = sample_funcs_list
-
         return x_exe, y_exe, {}
 
 class ScipyBeamAlignment(Algorithm, ABC):
@@ -772,10 +769,16 @@ class ScipyBeamAlignment(Algorithm, ABC):
         torch.set_default_tensor_type("torch.DoubleTensor")
 
         cpu_models = [copy.deepcopy(m).cpu() for m in model.models]
-        sample_funcs_list = [
-            draw_linear_product_kernel_post_paths(cpu_model, n_samples=self.n_samples)
-                for cpu_model in cpu_models
-            ]
+        if MaternKernel in [type(k) for k in cpu_models[0].covar_module.base_kernel.kernels]:
+            sample_funcs_list = [
+                draw_product_kernel_post_paths(cpu_model, n_samples=self.n_samples)
+                    for cpu_model in cpu_models
+                ]
+        else:
+            sample_funcs_list = [
+                draw_linear_product_kernel_post_paths(cpu_model, n_samples=self.n_samples)
+                    for cpu_model in cpu_models
+                ]
 
         xs_tuning_init = unif_random_sample_domain(
             self.n_samples, tuning_domain
@@ -883,7 +886,7 @@ class ScipyBeamAlignment(Algorithm, ABC):
             x_tuning = x_tuning.unsqueeze(1)
             xs = self.get_meas_scan_inputs(x_tuning, meas_scans, self.meas_dims)
             p = model.posterior(xs)
-            ys = p.sample(torch.Size([n_samples])) # shape n_samples x(n_meas_dims + 1) x (1 or 2) (2 if x&y)
+            ys = p.sample(torch.Size([n_samples])) # shape n_samples x n_points x (n_meas_scans + 1) x (1 or 2) (2 if x&y)
             rise = ys[...,1:,:] - ys[...,0:1,:] # shape n_samples x n_points x n_meas_scans x 1 or 2
             run = (meas_scans[:, 1] - meas_scans[:, 0]).reshape(-1,1).repeat(*rise.shape[:-2],1,rise.shape[-1]) # same shape as rise
             slope = rise/run

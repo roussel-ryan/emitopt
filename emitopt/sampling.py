@@ -5,7 +5,7 @@ import gpytorch
 import torch
 from botorch.models.gp_regression import SingleTaskGP
 from botorch.sampling.pathwise.prior_samplers import draw_kernel_feature_paths
-
+from gpytorch.kernels import ProductKernel, MaternKernel
 
 def draw_poly_kernel_prior_paths(
     poly_kernel, n_samples
@@ -38,13 +38,12 @@ def draw_poly_kernel_prior_paths(
 
 def draw_product_kernel_prior_paths(model, n_samples):
     ndim = model.train_inputs[0].shape[1]
-
+    matern_idx = [type(k) for k in model.covar_module.base_kernel.kernels].index(MaternKernel)
     matern_covar_module = copy.deepcopy(
-        model.covar_module.base_kernel.kernels[0]
-    )  # expects ProductKernel (Matern x Polynomial(dim=2))
-    matern_dims = copy.copy(model.covar_module.base_kernel.kernels[0].active_dims)
+        model.covar_module.base_kernel.kernels[matern_idx]
+    )  # expects ProductKernel (Matern x Polynomial)
+    matern_dims = copy.copy(model.covar_module.base_kernel.kernels[matern_idx].active_dims)
     # add assert matern
-    #     print('matern_covar_module.active_dims =', matern_covar_module.active_dims)
     matern_covar_module.active_dims = None
     matern_covar_module = gpytorch.kernels.ScaleKernel(matern_covar_module)
     matern_covar_module.outputscale = copy.copy(model.covar_module.outputscale.detach())
@@ -52,7 +51,7 @@ def draw_product_kernel_prior_paths(model, n_samples):
     mean_module = gpytorch.means.ZeroMean()
 
     likelihood = gpytorch.likelihoods.GaussianLikelihood().cpu()
-    likelihood.noise = copy.copy(model.likelihood.noise.detach())
+    likelihood.noise = copy.copy(model.likelihood.noise.detach()) + 1.e-6
 
     outcome_transform = None
     input_transform = None
@@ -74,20 +73,22 @@ def draw_product_kernel_prior_paths(model, n_samples):
         model=matern_model, sample_shape=torch.Size([n_samples]), num_features=2048
     )
 
-    quad_kernel = copy.deepcopy(model.covar_module.base_kernel.kernels[1])
-    quad_dim = copy.copy(quad_kernel.active_dims)
 
-    # add assert polynomial kernel pow=2 with 1 active dim
 
-    quad_prior_paths = draw_poly_kernel_prior_paths(quad_kernel, n_samples)
+    poly_prior_paths = [draw_poly_kernel_prior_paths(k, n_samples) 
+                        for k in model.covar_module.base_kernel.kernels
+                        if type(k) != MaternKernel]
+    poly_dims = [k.active_dims for k in model.covar_module.base_kernel.kernels
+                        if type(k) != MaternKernel]
 
     def product_kernel_prior_paths(xs):
         xs_matern = torch.index_select(xs, dim=-1, index=matern_dims).float()
-        xs_quad = torch.index_select(xs, dim=-1, index=quad_dim).float()
-        return (
-            matern_prior_paths(xs_matern).reshape(n_samples, -1)
-            * quad_prior_paths(xs_quad)
-        ).double()
+        xs_poly = [torch.index_select(xs, dim=-1, index=dims).float() for dims in poly_dims]
+        ys_poly = 1.0
+        for i in range(len(poly_prior_paths)):
+            ys_poly *= poly_prior_paths[i](xs_poly[i])
+        return (matern_prior_paths(xs_matern).reshape(n_samples, -1) * ys_poly).double()
+
 
     return product_kernel_prior_paths
 
